@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -60,19 +61,23 @@ func TestAuthStoreIsPrivateAndRoundTrips(t *testing.T) {
 		t.Fatalf("SaveAuth: %v", err)
 	}
 
-	info, err := os.Stat(filepath.Join(store.Dir, "auth.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("auth.yaml permissions = %o, want 600", info.Mode().Perm())
-	}
-	keyInfo, err := os.Stat(filepath.Join(store.Dir, "auth.key"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if keyInfo.Mode().Perm() != 0o600 {
-		t.Fatalf("auth.key permissions = %o, want 600", keyInfo.Mode().Perm())
+	// Windows does not expose Unix owner/group/other permission bits through
+	// FileMode, so Mode().Perm() cannot verify 0600 there.
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(filepath.Join(store.Dir, "auth.yaml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("auth.yaml permissions = %o, want 600", info.Mode().Perm())
+		}
+		keyInfo, err := os.Stat(filepath.Join(store.Dir, "auth.key"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if keyInfo.Mode().Perm() != 0o600 {
+			t.Fatalf("auth.key permissions = %o, want 600", keyInfo.Mode().Perm())
+		}
 	}
 	data, err := os.ReadFile(filepath.Join(store.Dir, "auth.yaml"))
 	if err != nil {

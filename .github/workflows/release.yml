@@ -1,0 +1,65 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, for example v1.2.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run tests
+        run: go test ./...
+      - name: Run vet
+        run: go vet ./...
+
+  release:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME}"
+          else
+            version="${{ inputs.version }}"
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+      - name: Build release archives
+        run: make release VERSION="${{ steps.version.outputs.version }}"
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: "${{ github.token }}"
+        run: |
+          gh release create "${{ steps.version.outputs.version }}" \
+            dist/*.tar.gz dist/*.zip dist/SHA256SUMS \
+            --title "gha ${{ steps.version.outputs.version }}" \
+            --generate-notes

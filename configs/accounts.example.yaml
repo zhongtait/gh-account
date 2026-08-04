@@ -1,0 +1,11 @@
+accounts:
+  personal:
+    login: personal-user
+    git_name: Personal User
+    email: personal@example.com
+    protocol: https
+  work:
+    login: company-user
+    git_name: Company User
+    email: work@company.com
+    protocol: ssh

@@ -53,9 +53,6 @@ func TestDoctorHealthy(t *testing.T) {
 		Store:  store,
 		Git:    fakeGit{repo: true},
 		GitHub: fakeGH{},
-		LookPath: func(name string) (string, error) {
-			return "/usr/bin/" + name, nil
-		},
 	}.Run(context.Background())
 
 	if !report.Healthy() {

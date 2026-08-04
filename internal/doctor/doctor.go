@@ -35,32 +35,15 @@ func (r Report) Healthy() bool {
 
 // Runner performs environment diagnostics.
 type Runner struct {
-	Store    *config.Store
-	Git      git.Client
-	GitHub   github.Client
-	LookPath func(string) (string, error)
+	Store  *config.Store
+	Git    git.Client
+	GitHub github.Client
 }
 
 // Run executes diagnostics.
 func (r Runner) Run(ctx context.Context) Report {
-	look := r.LookPath
-	if look == nil {
-		look = utils.LookPath
-	}
-
 	var checks []Check
-
-	if _, err := look("gh"); err != nil {
-		checks = append(checks, Check{Name: "gh", OK: false, Message: "gh is not installed or not in PATH"})
-	} else {
-		checks = append(checks, Check{Name: "gh", OK: true, Message: "gh installed"})
-	}
-
-	if _, err := look("git"); err != nil {
-		checks = append(checks, Check{Name: "git", OK: false, Message: "git is not installed or not in PATH"})
-	} else {
-		checks = append(checks, Check{Name: "git", OK: true, Message: "git installed"})
-	}
+	checks = append(checks, Check{Name: "git", OK: true, Message: "native Git support available"})
 
 	if r.Store == nil {
 		checks = append(checks, Check{Name: "config", OK: false, Message: "config store is not configured"})
@@ -90,7 +73,7 @@ func (r Runner) Run(ctx context.Context) Report {
 
 	if r.GitHub != nil {
 		if login, err := r.GitHub.CurrentLogin(ctx); err != nil {
-			checks = append(checks, Check{Name: "token", OK: false, Message: "unable to read active GitHub login; run gh auth login"})
+			checks = append(checks, Check{Name: "token", OK: false, Message: "unable to read active GitHub login; run gha login"})
 		} else if login == "" {
 			checks = append(checks, Check{Name: "token", OK: false, Message: "no active GitHub login"})
 		} else {

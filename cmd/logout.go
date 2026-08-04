@@ -13,7 +13,7 @@ func newLogoutCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:               "logout [alias]",
-		Short:             "Log out a GitHub account via GitHub CLI",
+		Short:             "Log out a locally stored GitHub OAuth account",
 		Args:              cobra.MaximumNArgs(1),
 		ValidArgsFunction: completeAccountAliases,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -31,6 +31,9 @@ func newLogoutCmd() *cobra.Command {
 					return err
 				}
 				loginName = account.Login
+				if hostname == "github.com" && account.Hostname != "" {
+					hostname = account.Hostname
+				}
 			}
 
 			if err := deps.GitHub.Logout(ctx, loginName, hostname); err != nil {
@@ -41,11 +44,11 @@ func newLogoutCmd() *cobra.Command {
 			}
 
 			if alias != "" {
-				terminal.Success(deps.Stdout, "Logged out GitHub account for %s (%s)", alias, loginName)
+				terminal.Success(deps.Stdout, "Removed local OAuth credential for %s (%s)", alias, loginName)
 			} else if loginName != "" {
-				terminal.Success(deps.Stdout, "Logged out GitHub account %s", loginName)
+				terminal.Success(deps.Stdout, "Removed local OAuth credential for %s", loginName)
 			} else {
-				terminal.Success(deps.Stdout, "Logged out GitHub account")
+				terminal.Success(deps.Stdout, "Removed local active OAuth credential")
 			}
 			return nil
 		},

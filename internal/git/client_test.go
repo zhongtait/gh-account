@@ -2,44 +2,73 @@ package git
 
 import (
 	"context"
-	"strings"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
-type fakeRunner struct {
-	responses map[string]string
-	calls     []string
-}
-
-func (f *fakeRunner) Run(ctx context.Context, name string, args ...string) (string, string, error) {
-	key := name + " " + strings.Join(args, " ")
-	f.calls = append(f.calls, key)
-	if out, ok := f.responses[key]; ok {
-		return out, "", nil
+func TestNativeClientRepositoryOperations(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	// fuzzy match ignoring -C <dir>
-	for k, out := range f.responses {
-		if strings.Contains(key, strings.TrimPrefix(k, "git ")) || strings.HasSuffix(key, strings.TrimPrefix(k, "git ")) {
-			return out, "", nil
-		}
+	if err := os.WriteFile(filepath.Join(root, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	return "", "", nil
-}
+	if err := os.WriteFile(filepath.Join(root, ".git", "config"), []byte("[remote \"origin\"]\n\turl = https://github.com/a/b.git\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
-func TestSetAndGetIdentityUsesScope(t *testing.T) {
-	runner := &fakeRunner{responses: map[string]string{}}
-	client := NewCLIClient(runner, "/tmp/repo")
+	client := NewNativeClient(filepath.Join(root, "nested"))
+	isRepo, err := client.IsRepo(context.Background())
+	if err != nil || !isRepo {
+		t.Fatalf("IsRepo = %v, %v", isRepo, err)
+	}
+	top, err := client.TopLevel(context.Background())
+	if err != nil || top != root {
+		t.Fatalf("TopLevel = %q, %v", top, err)
+	}
+	branch, err := client.CurrentBranch(context.Background())
+	if err != nil || branch != "main" {
+		t.Fatalf("CurrentBranch = %q, %v", branch, err)
+	}
+	remoteURL, err := client.GetRemoteURL(context.Background(), "origin")
+	if err != nil || remoteURL != "https://github.com/a/b.git" {
+		t.Fatalf("GetRemoteURL = %q, %v", remoteURL, err)
+	}
 
+	if err := client.SetRemoteURL(context.Background(), "origin", "git@github.com:a/c.git"); err != nil {
+		t.Fatalf("SetRemoteURL: %v", err)
+	}
 	if err := client.SetIdentity(context.Background(), ScopeLocal, Identity{Name: "Tu Xiao", Email: "a@b.com"}); err != nil {
 		t.Fatalf("SetIdentity: %v", err)
 	}
-
-	joined := strings.Join(runner.calls, "\n")
-	if !strings.Contains(joined, "config --local user.name Tu Xiao") {
-		t.Fatalf("missing name call: %s", joined)
+	identity, err := client.GetIdentity(context.Background(), ScopeLocal)
+	if err != nil {
+		t.Fatalf("GetIdentity: %v", err)
 	}
-	if !strings.Contains(joined, "config --local user.email a@b.com") {
-		t.Fatalf("missing email call: %s", joined)
+	if identity.Name != "Tu Xiao" || identity.Email != "a@b.com" {
+		t.Fatalf("unexpected identity: %+v", identity)
+	}
+	remoteURL, err = client.GetRemoteURL(context.Background(), "origin")
+	if err != nil || remoteURL != "git@github.com:a/c.git" {
+		t.Fatalf("updated remote = %q, %v", remoteURL, err)
+	}
+}
+
+func TestNativeClientGlobalIdentity(t *testing.T) {
+	global := filepath.Join(t.TempDir(), "gitconfig")
+	t.Setenv("GIT_CONFIG_GLOBAL", global)
+	client := NewNativeClient(t.TempDir())
+	if err := client.SetIdentity(context.Background(), ScopeGlobal, Identity{Name: "Global User", Email: "global@example.com"}); err != nil {
+		t.Fatalf("SetIdentity: %v", err)
+	}
+	identity, err := client.GetIdentity(context.Background(), ScopeGlobal)
+	if err != nil {
+		t.Fatalf("GetIdentity: %v", err)
+	}
+	if identity.Name != "Global User" || identity.Email != "global@example.com" {
+		t.Fatalf("unexpected identity: %+v", identity)
 	}
 }
 

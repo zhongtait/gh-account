@@ -1,8 +1,13 @@
 package config
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -74,6 +79,7 @@ func (s *Store) LoadAccounts() (AccountsFile, error) {
 	}
 	for alias, account := range file.Accounts {
 		account.Protocol = normalizeProtocol(account.Protocol)
+		account.Hostname = normalizeHostname(account.Hostname)
 		file.Accounts[alias] = account
 	}
 	return file, nil
@@ -112,10 +118,173 @@ func (s *Store) SaveConfig(file ConfigFile) error {
 	if file.DefaultScope == "" {
 		file.DefaultScope = "local"
 	}
-	if file.Directories == nil {
-		file.Directories = map[string]DirectoryBinding{}
-	}
 	return writeYAML(utils.ConfigPath(s.Dir), file)
+}
+
+// LoadAuth reads the local OAuth credential store. Missing auth.yaml is
+// treated as an empty store so existing installations upgrade seamlessly.
+func (s *Store) LoadAuth() (AuthFile, error) {
+	path := utils.AuthPath(s.Dir)
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return DefaultAuth(), nil
+	}
+	if err != nil {
+		return AuthFile{}, err
+	}
+	var file AuthFile
+	if err := yaml.Unmarshal(data, &file); err != nil {
+		return AuthFile{}, fmt.Errorf("parse auth.yaml: %w", err)
+	}
+	if file.Credentials == nil {
+		file.Credentials = map[string]Credential{}
+	}
+	for key, credential := range file.Credentials {
+		if credential.EncryptedToken == "" {
+			continue
+		}
+		plain, decryptErr := s.decryptToken(key, credential.EncryptedToken)
+		if decryptErr != nil {
+			return AuthFile{}, fmt.Errorf("decrypt auth credential %q: %w", key, decryptErr)
+		}
+		credential.AccessToken = plain
+		file.Credentials[key] = credential
+	}
+	return file, nil
+}
+
+// SaveAuth writes OAuth credentials with owner-only permissions.
+func (s *Store) SaveAuth(file AuthFile) error {
+	if file.Credentials == nil {
+		file.Credentials = map[string]Credential{}
+	}
+	toSave := AuthFile{Active: file.Active, Credentials: map[string]Credential{}}
+	for key, credential := range file.Credentials {
+		if credential.AccessToken != "" {
+			encrypted, encryptErr := s.encryptToken(key, credential.AccessToken)
+			if encryptErr != nil {
+				return encryptErr
+			}
+			credential.EncryptedToken = encrypted
+			credential.AccessToken = ""
+		}
+		toSave.Credentials[key] = credential
+	}
+	data, err := yaml.Marshal(toSave)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
+		return err
+	}
+	path := utils.AuthPath(s.Dir)
+	temporary, err := os.CreateTemp(s.Dir, ".auth.yaml-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o600); err != nil {
+		temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(data); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
+}
+
+func (s *Store) authKey(create bool) ([]byte, error) {
+	path := utils.AuthKeyPath(s.Dir)
+	data, err := os.ReadFile(path)
+	if err == nil {
+		if len(data) != 32 {
+			return nil, errors.New("auth.key must contain 32 bytes")
+		}
+		if chmodErr := os.Chmod(path, 0o600); chmodErr != nil {
+			return nil, chmodErr
+		}
+		return data, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) || !create {
+		return nil, err
+	}
+	data = make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, data); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+func (s *Store) encryptToken(aad, token string) (string, error) {
+	key, err := s.authKey(true)
+	if err != nil {
+		return "", err
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", err
+	}
+	ciphertext := gcm.Seal(nonce, nonce, []byte(token), []byte(aad))
+	return "v1:" + base64.RawStdEncoding.EncodeToString(ciphertext), nil
+}
+
+func (s *Store) decryptToken(aad, encoded string) (string, error) {
+	if !strings.HasPrefix(encoded, "v1:") {
+		return "", errors.New("unsupported encrypted token format")
+	}
+	key, err := s.authKey(false)
+	if err != nil {
+		return "", err
+	}
+	data, err := base64.RawStdEncoding.DecodeString(strings.TrimPrefix(encoded, "v1:"))
+	if err != nil {
+		return "", err
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	if len(data) < gcm.NonceSize() {
+		return "", errors.New("encrypted token is truncated")
+	}
+	plain, err := gcm.Open(nil, data[:gcm.NonceSize()], data[gcm.NonceSize():], []byte(aad))
+	if err != nil {
+		return "", errors.New("invalid auth key or encrypted token")
+	}
+	return string(plain), nil
 }
 
 // GetAccount returns an account by alias.
@@ -147,6 +316,7 @@ func (s *Store) UpsertAccount(alias string, account Account) error {
 		return errors.New("email is required")
 	}
 	account.Protocol = normalizeProtocol(account.Protocol)
+	account.Hostname = normalizeHostname(account.Hostname)
 
 	file, err := s.LoadAccounts()
 	if err != nil {
@@ -247,4 +417,15 @@ func normalizeProtocol(protocol string) string {
 	default:
 		return p
 	}
+}
+
+func normalizeHostname(hostname string) string {
+	hostname = strings.TrimSpace(hostname)
+	hostname = strings.TrimPrefix(hostname, "https://")
+	hostname = strings.TrimPrefix(hostname, "http://")
+	hostname = strings.TrimSuffix(hostname, "/")
+	if hostname == "" {
+		return "github.com"
+	}
+	return hostname
 }

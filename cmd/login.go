@@ -20,11 +20,15 @@ func newLoginCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:               "login [alias]",
-		Short:             "Log in with GitHub CLI and save the account profile",
+		Short:             "Log in with GitHub OAuth and save the account profile",
 		Args:              cobra.MaximumNArgs(1),
 		ValidArgsFunction: completeAccountAliases,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := deps.Store.EnsureInitialized(); err != nil {
+				return err
+			}
+			reader := bufio.NewReader(deps.Stdin)
+			if err := ensureOAuthClientID(reader); err != nil {
 				return err
 			}
 
@@ -39,6 +43,9 @@ func newLoginCmd() *cobra.Command {
 				if acc, err := deps.Store.GetAccount(alias); err == nil {
 					existing = acc
 					hasExisting = true
+					if hostname == "github.com" && acc.Hostname != "" {
+						hostname = acc.Hostname
+					}
 					if protocol == "" {
 						protocol = acc.Protocol
 					}
@@ -56,7 +63,7 @@ func newLoginCmd() *cobra.Command {
 
 			ctx := commandContext(cmd)
 			if err := deps.GitHub.Login(ctx, hostname, protocol); err != nil {
-				return fmt.Errorf("gh auth login failed: %w", err)
+				return fmt.Errorf("GitHub OAuth login failed: %w", err)
 			}
 
 			loginName, err := deps.GitHub.CurrentLogin(ctx)
@@ -67,7 +74,6 @@ func newLoginCmd() *cobra.Command {
 				return fmt.Errorf("login succeeded but active GitHub user is empty")
 			}
 
-			reader := bufio.NewReader(deps.Stdin)
 			if alias == "" {
 				alias, err = readValue(reader, "Alias", suggestAlias(loginName))
 				if err != nil {
@@ -103,6 +109,7 @@ func newLoginCmd() *cobra.Command {
 
 			account := config.Account{
 				Login:    loginName,
+				Hostname: hostname,
 				GitName:  gitName,
 				Email:    email,
 				Protocol: protocol,

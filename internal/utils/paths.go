@@ -54,3 +54,13 @@ func AccountsPath(configDir string) string {
 func ConfigPath(configDir string) string {
 	return filepath.Join(configDir, "config.yaml")
 }
+
+// AuthPath returns the OAuth credential path under the config dir.
+func AuthPath(configDir string) string {
+	return filepath.Join(configDir, "auth.yaml")
+}
+
+// AuthKeyPath returns the local key used to encrypt OAuth tokens.
+func AuthKeyPath(configDir string) string {
+	return filepath.Join(configDir, "auth.key")
+}

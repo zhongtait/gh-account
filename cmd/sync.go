@@ -18,7 +18,7 @@ func newSyncCmd() *cobra.Command {
 			}
 
 			ctx := commandContext(cmd)
-			login, err := deps.GitHub.CurrentLogin(ctx)
+			login, hostname, err := currentGitHubIdentity(ctx)
 			if err != nil {
 				return fmt.Errorf("unable to detect active GitHub login: %w", err)
 			}
@@ -30,7 +30,7 @@ func newSyncCmd() *cobra.Command {
 
 			var alias string
 			for name, acc := range file.Accounts {
-				if acc.Login == login {
+				if sameGitHubAccount(login, hostname, acc.Login, acc.Hostname) {
 					alias = name
 					break
 				}

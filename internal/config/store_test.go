@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -45,6 +46,47 @@ func TestStoreInitLoadSave(t *testing.T) {
 	}
 	if len(aliases) != 1 || aliases[0] != "personal" {
 		t.Fatalf("unexpected aliases: %v", aliases)
+	}
+}
+
+func TestAuthStoreIsPrivateAndRoundTrips(t *testing.T) {
+	store := NewStore(t.TempDir())
+	auth := DefaultAuth()
+	auth.Active = "github.com|personal-user"
+	auth.Credentials[auth.Active] = Credential{
+		Hostname: "github.com", Login: "personal-user", AccessToken: "secret-token",
+	}
+	if err := store.SaveAuth(auth); err != nil {
+		t.Fatalf("SaveAuth: %v", err)
+	}
+
+	info, err := os.Stat(filepath.Join(store.Dir, "auth.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("auth.yaml permissions = %o, want 600", info.Mode().Perm())
+	}
+	keyInfo, err := os.Stat(filepath.Join(store.Dir, "auth.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keyInfo.Mode().Perm() != 0o600 {
+		t.Fatalf("auth.key permissions = %o, want 600", keyInfo.Mode().Perm())
+	}
+	data, err := os.ReadFile(filepath.Join(store.Dir, "auth.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "secret-token") || !strings.Contains(string(data), "encrypted_token:") {
+		t.Fatal("token was not encrypted in auth.yaml")
+	}
+	loaded, err := store.LoadAuth()
+	if err != nil {
+		t.Fatalf("LoadAuth: %v", err)
+	}
+	if loaded.Active != auth.Active || loaded.Credentials[auth.Active].AccessToken != "secret-token" {
+		t.Fatalf("unexpected auth: %+v", loaded)
 	}
 }
 

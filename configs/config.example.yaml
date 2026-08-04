@@ -1,7 +1,2 @@
 default_scope: local
 update_remote: false
-directories:
-  ~/Code/Personal:
-    account: personal
-  ~/Code/Work:
-    account: work

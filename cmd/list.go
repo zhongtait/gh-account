@@ -27,10 +27,7 @@ func newListCmd() *cobra.Command {
 				return nil
 			}
 
-			activeLogin := ""
-			if login, err := deps.GitHub.CurrentLogin(commandContext(cmd)); err == nil {
-				activeLogin = login
-			}
+			activeLogin, activeHostname, _ := currentGitHubIdentity(commandContext(cmd))
 
 			aliases := make([]string, 0, len(file.Accounts))
 			for alias := range file.Accounts {
@@ -43,7 +40,7 @@ func newListCmd() *cobra.Command {
 			for _, alias := range aliases {
 				account := file.Accounts[alias]
 				active := ""
-				if activeLogin != "" && account.Login == activeLogin {
+				if activeLogin != "" && sameGitHubAccount(activeLogin, activeHostname, account.Login, account.Hostname) {
 					active = "*"
 				}
 				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", alias, account.Login, account.Email, account.Protocol, active)

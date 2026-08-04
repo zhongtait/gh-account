@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/zhongtait/gh-account/internal/config"
 	"github.com/zhongtait/gh-account/internal/git"
+	"github.com/zhongtait/gh-account/internal/github"
 	"github.com/zhongtait/gh-account/internal/remote"
 	"github.com/zhongtait/gh-account/internal/terminal"
 )
@@ -40,8 +41,14 @@ func newUseCmd() *cobra.Command {
 
 			ctx := commandContext(cmd)
 
-			if err := deps.GitHub.SwitchUser(ctx, account.Login); err != nil {
-				terminal.Warn(deps.Stdout, "gh auth switch failed: %v", err)
+			var switchErr error
+			if hostClient, ok := deps.GitHub.(github.HostClient); ok {
+				switchErr = hostClient.SwitchUserAtHost(ctx, account.Login, account.Hostname)
+			} else {
+				switchErr = deps.GitHub.SwitchUser(ctx, account.Login)
+			}
+			if switchErr != nil {
+				terminal.Warn(deps.Stdout, "OAuth account switch failed: %v", switchErr)
 				terminal.Info(deps.Stdout, "Continuing with git identity sync for %s", alias)
 			} else {
 				terminal.Success(deps.Stdout, "Switched GitHub account to %s", account.Login)

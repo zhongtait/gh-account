@@ -20,10 +20,10 @@ func newCurrentCmd() *cobra.Command {
 			var matchedAlias string
 			var account config.Account
 			if err := requireInitialized(); err == nil {
-				if login, err := deps.GitHub.CurrentLogin(ctx); err == nil {
+				if login, hostname, err := currentGitHubIdentity(ctx); err == nil {
 					if file, err := deps.Store.LoadAccounts(); err == nil {
 						for alias, acc := range file.Accounts {
-							if acc.Login == login {
+							if sameGitHubAccount(login, hostname, acc.Login, acc.Hostname) {
 								matchedAlias = alias
 								account = acc
 								break

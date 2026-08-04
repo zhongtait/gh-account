@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/zhongtait/gh-account/internal/config"
@@ -31,6 +33,8 @@ var (
 	deps Dependencies
 
 	flagConfigDir    string
+	flagClientID     string
+	flagNoBrowser    bool
 	flagGlobal       bool
 	flagUpdateRemote bool
 )
@@ -46,7 +50,7 @@ func Execute() error {
 func NewRootCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "gha",
-		Short:         "Manage multiple GitHub accounts with gh and git identity sync",
+		Short:         "Manage multiple GitHub accounts with OAuth and git identity sync",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
@@ -55,6 +59,8 @@ func NewRootCommand() *cobra.Command {
 	}
 
 	root.PersistentFlags().StringVar(&flagConfigDir, "config-dir", "", "config directory (default: ~/.config/gha)")
+	root.PersistentFlags().StringVar(&flagClientID, "client-id", "", "GitHub OAuth App client ID (or GH_GHA_CLIENT_ID)")
+	root.PersistentFlags().BoolVar(&flagNoBrowser, "no-browser", false, "do not open the OAuth verification page automatically")
 
 	root.AddCommand(newInitCmd())
 	root.AddCommand(newAddCmd())
@@ -95,10 +101,26 @@ func setupDeps(cmd *cobra.Command) error {
 		return err
 	}
 
+	store := config.NewStore(dir)
+	clientID := strings.TrimSpace(flagClientID)
+	if clientID == "" {
+		clientID = github.ClientIDFromEnv()
+	}
+	if clientID == "" {
+		if cfg, configErr := store.LoadConfig(); configErr == nil {
+			clientID = cfg.OAuthClientID
+		}
+	}
+
+	oauthClient := github.NewOAuthClient(store, cmd.OutOrStdout(), clientID)
+	if flagNoBrowser {
+		oauthClient.OpenBrowser = nil
+	}
+
 	deps = Dependencies{
-		Store:  config.NewStore(dir),
-		Git:    git.NewCLIClient(utils.RealRunner{}, cwd),
-		GitHub: github.NewCLIClient(utils.RealRunner{}),
+		Store:  store,
+		Git:    git.NewNativeClient(cwd),
+		GitHub: oauthClient,
 		Stdout: cmd.OutOrStdout(),
 		Stderr: cmd.ErrOrStderr(),
 		Stdin:  cmd.InOrStdin(),
@@ -119,6 +141,34 @@ func commandContext(cmd *cobra.Command) context.Context {
 		return cmd.Context()
 	}
 	return context.Background()
+}
+
+func ensureOAuthClientID(reader *bufio.Reader) error {
+	client, ok := deps.GitHub.(github.ClientIDClient)
+	if !ok || strings.TrimSpace(client.ConfiguredClientID()) != "" {
+		return nil
+	}
+
+	fmt.Fprint(deps.Stdout, "GitHub OAuth Client ID: ")
+	line, err := reader.ReadString('\n')
+	if err != nil && len(line) == 0 {
+		return err
+	}
+	clientID := strings.TrimSpace(line)
+	if clientID == "" {
+		return fmt.Errorf("GitHub OAuth client ID is required")
+	}
+	client.SetClientID(clientID)
+
+	cfg, err := deps.Store.LoadConfig()
+	if err != nil {
+		return err
+	}
+	cfg.OAuthClientID = clientID
+	if err := deps.Store.SaveConfig(cfg); err != nil {
+		return fmt.Errorf("save GitHub OAuth client ID: %w", err)
+	}
+	return nil
 }
 
 func newVersionCmd() *cobra.Command {

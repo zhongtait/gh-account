@@ -2,79 +2,133 @@ package github
 
 import (
 	"context"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/zhongtait/gh-account/internal/config"
 )
 
-type fakeRunner struct {
-	out   string
-	calls []string
+type fakeTransport struct {
+	responses []string
+	statuses  []int
+	requests  []*http.Request
 }
 
-func (f *fakeRunner) Run(ctx context.Context, name string, args ...string) (string, string, error) {
-	f.calls = append(f.calls, name+" "+strings.Join(args, " "))
-	return f.out, "", nil
-}
-
-type fakeInteractive struct {
-	calls []string
-}
-
-func (f *fakeInteractive) RunInteractive(ctx context.Context, name string, args ...string) error {
-	f.calls = append(f.calls, name+" "+strings.Join(args, " "))
-	return nil
-}
-
-func TestCurrentLoginFromAPI(t *testing.T) {
-	client := NewCLIClient(&fakeRunner{out: "personal-user"})
-	login, err := client.CurrentLogin(context.Background())
-	if err != nil {
-		t.Fatalf("CurrentLogin: %v", err)
+func (f *fakeTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	f.requests = append(f.requests, request)
+	index := len(f.requests) - 1
+	status := http.StatusOK
+	if index < len(f.statuses) && f.statuses[index] != 0 {
+		status = f.statuses[index]
 	}
-	if login != "personal-user" {
-		t.Fatalf("unexpected login: %s", login)
+	body := "{}"
+	if index < len(f.responses) {
+		body = f.responses[index]
 	}
+	return &http.Response{
+		StatusCode: status,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     make(http.Header),
+		Request:    request,
+	}, nil
 }
 
-func TestExtractActiveLogin(t *testing.T) {
-	status := strings.TrimSpace(`
-github.com
-  ✓ Logged in to github.com account personal-user (keyring)
-  - Active account: true
-`)
-	if got := extractActiveLogin(status); got != "personal-user" {
-		t.Fatalf("expected personal-user, got %s", got)
-	}
-}
+func TestLoginDeviceFlowStoresCredential(t *testing.T) {
+	transport := &fakeTransport{responses: []string{
+		`{"device_code":"device","user_code":"ABCD-EFGH","verification_uri":"https://github.com/login/device","verification_uri_complete":"https://github.com/login/device?user_code=ABCD-EFGH","expires_in":600,"interval":1}`,
+		`{"error":"authorization_pending"}`,
+		`{"access_token":"secret-token","token_type":"bearer","scope":"read:user"}`,
+		`{"login":"personal-user"}`,
+	}}
+	store := config.NewStore(t.TempDir())
+	client := NewOAuthClient(store, io.Discard, "client-id")
+	client.HTTP = &http.Client{Transport: transport}
+	client.OpenBrowser = func(string) error { return nil }
 
-func TestLoginUsesInteractiveRunner(t *testing.T) {
-	runner := &fakeRunner{}
-	interactive := &fakeInteractive{}
-	client := &CLIClient{Runner: runner, InteractiveRunner: interactive}
-	if err := client.Login(context.Background(), "github.com", "ssh"); err != nil {
+	if err := client.Login(context.Background(), "github.com", "https"); err != nil {
 		t.Fatalf("Login: %v", err)
 	}
-	if len(interactive.calls) != 1 {
-		t.Fatalf("expected interactive call, got %v", interactive.calls)
+	auth, err := store.LoadAuth()
+	if err != nil {
+		t.Fatalf("LoadAuth: %v", err)
 	}
-	if !strings.Contains(interactive.calls[0], "auth login") {
-		t.Fatalf("unexpected call: %s", interactive.calls[0])
+	credential, ok := auth.Credentials[credentialKey("github.com", "personal-user")]
+	if !ok {
+		t.Fatalf("credential was not stored: %+v", auth)
 	}
-	if !strings.Contains(interactive.calls[0], "--git-protocol ssh") {
-		t.Fatalf("missing protocol: %s", interactive.calls[0])
+	if credential.AccessToken != "secret-token" || auth.Active == "" {
+		t.Fatalf("unexpected auth file: %+v", auth)
+	}
+	if len(transport.requests) != 4 {
+		t.Fatalf("expected device, two token, and user requests; got %d", len(transport.requests))
+	}
+	if got := transport.requests[0].URL.Path; got != "/login/device/code" {
+		t.Fatalf("unexpected device endpoint: %s", got)
+	}
+	if got := transport.requests[1].URL.Path; got != "/login/oauth/access_token" {
+		t.Fatalf("unexpected token endpoint: %s", got)
+	}
+	if got := transport.requests[3].Header.Get("Authorization"); got != "Bearer secret-token" {
+		t.Fatalf("unexpected authorization header: %q", got)
 	}
 }
 
-func TestLogoutPassesUser(t *testing.T) {
-	runner := &fakeRunner{}
-	client := NewCLIClient(runner)
-	if err := client.Logout(context.Background(), "personal-user", "github.com"); err != nil {
+func TestCurrentLoginAndSwitchUser(t *testing.T) {
+	transport := &fakeTransport{responses: []string{`{"login":"work-user"}`}}
+	store := config.NewStore(t.TempDir())
+	auth := config.DefaultAuth()
+	auth.Credentials[credentialKey("github.com", "work-user")] = config.Credential{
+		Hostname: "github.com", Login: "work-user", AccessToken: "work-token",
+	}
+	auth.Credentials[credentialKey("github.com", "personal-user")] = config.Credential{
+		Hostname: "github.com", Login: "personal-user", AccessToken: "personal-token",
+	}
+	auth.Active = credentialKey("github.com", "work-user")
+	if err := store.SaveAuth(auth); err != nil {
+		t.Fatal(err)
+	}
+	client := NewOAuthClient(store, io.Discard, "client-id")
+	client.HTTP = &http.Client{Transport: transport}
+
+	login, err := client.CurrentLogin(context.Background())
+	if err != nil || login != "work-user" {
+		t.Fatalf("CurrentLogin = %q, %v", login, err)
+	}
+	if err := client.SwitchUser(context.Background(), "personal-user"); err != nil {
+		t.Fatalf("SwitchUser: %v", err)
+	}
+	updated, err := store.LoadAuth()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Active != credentialKey("github.com", "personal-user") {
+		t.Fatalf("unexpected active credential: %q", updated.Active)
+	}
+}
+
+func TestLogoutRemovesOnlyRequestedCredential(t *testing.T) {
+	store := config.NewStore(t.TempDir())
+	auth := config.DefaultAuth()
+	auth.Credentials[credentialKey("github.com", "one")] = config.Credential{Hostname: "github.com", Login: "one", AccessToken: "one-token"}
+	auth.Credentials[credentialKey("github.com", "two")] = config.Credential{Hostname: "github.com", Login: "two", AccessToken: "two-token"}
+	auth.Active = credentialKey("github.com", "two")
+	if err := store.SaveAuth(auth); err != nil {
+		t.Fatal(err)
+	}
+	client := NewOAuthClient(store, io.Discard, "client-id")
+	if err := client.Logout(context.Background(), "one", "github.com"); err != nil {
 		t.Fatalf("Logout: %v", err)
 	}
-	if len(runner.calls) != 1 {
-		t.Fatalf("unexpected calls: %v", runner.calls)
+	updated, err := store.LoadAuth()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(runner.calls[0], "auth logout") || !strings.Contains(runner.calls[0], "--user personal-user") {
-		t.Fatalf("unexpected logout call: %s", runner.calls[0])
+	if _, ok := updated.Credentials[credentialKey("github.com", "one")]; ok {
+		t.Fatal("requested credential was not removed")
+	}
+	if _, ok := updated.Credentials[credentialKey("github.com", "two")]; !ok {
+		t.Fatal("other credential was removed")
 	}
 }

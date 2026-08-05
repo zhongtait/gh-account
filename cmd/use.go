@@ -64,6 +64,19 @@ func newUseCmd() *cobra.Command {
 				}
 			}
 
+			credentialConfigured := false
+			if credentialClient, ok := deps.Git.(git.CredentialClient); ok {
+				if err := credentialClient.SetCredentialHelper(ctx, scope, credentialHelperCommand(deps.Store, account), credentialAccountKey(account)); err != nil {
+					return fmt.Errorf("configure Git credential helper: %w", err)
+				}
+				credentialConfigured = true
+			} else {
+				terminal.Warn(deps.Stdout, "Git credential helper integration is unavailable")
+			}
+			if credentialConfigured {
+				terminal.Success(deps.Stdout, "Configured Git credentials for %s", account.Login)
+			}
+
 			if err := deps.Git.SetIdentity(ctx, scope, git.Identity{Name: account.GitName, Email: account.Email}); err != nil {
 				return err
 			}

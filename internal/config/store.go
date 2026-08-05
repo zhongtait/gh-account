@@ -153,6 +153,25 @@ func (s *Store) LoadAuth() (AuthFile, error) {
 	return file, nil
 }
 
+// GetCredential returns the stored OAuth credential for a GitHub identity.
+func (s *Store) GetCredential(hostname, login string) (Credential, bool, error) {
+	hostname = normalizeHostname(hostname)
+	login = strings.TrimSpace(login)
+	if login == "" {
+		return Credential{}, false, nil
+	}
+	auth, err := s.LoadAuth()
+	if err != nil {
+		return Credential{}, false, err
+	}
+	for _, credential := range auth.Credentials {
+		if strings.EqualFold(normalizeHostname(credential.Hostname), hostname) && strings.EqualFold(strings.TrimSpace(credential.Login), login) {
+			return credential, strings.TrimSpace(credential.AccessToken) != "", nil
+		}
+	}
+	return Credential{}, false, nil
+}
+
 // SaveAuth writes OAuth credentials with owner-only permissions.
 func (s *Store) SaveAuth(file AuthFile) error {
 	if file.Credentials == nil {

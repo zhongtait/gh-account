@@ -21,6 +21,9 @@ func (f fakeGit) GetIdentity(ctx context.Context, scope git.Scope) (git.Identity
 func (f fakeGit) SetIdentity(ctx context.Context, scope git.Scope, identity git.Identity) error {
 	return nil
 }
+func (f fakeGit) SetCredentialHelper(ctx context.Context, scope git.Scope, command, accountKey string) error {
+	return nil
+}
 func (f fakeGit) GetRemoteURL(ctx context.Context, name string) (string, error) {
 	if f.repo {
 		return "https://github.com/a/b.git", nil

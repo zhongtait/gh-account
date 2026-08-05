@@ -6,6 +6,7 @@
 
 - 管理多个 GitHub 账号配置
 - 切换本地 OAuth 登录账号并同步 Git `user.name` / `user.email`
+- 通过 Git credential helper 让 HTTPS 的 `pull`、`fetch` 和 `push` 使用当前账号
 - 按本地或全局范围写入 Git 身份
 - 可选地按账号协议更新 `origin` remote
 - 根据当前 GitHub 仓库的 `origin` remote 自动选择账号
@@ -185,6 +186,10 @@ gh-account/
 说明：`gha edit` 仍会调用用户主动配置的 `$EDITOR`/`$VISUAL`，这是编辑器集成，不参与 OAuth、Git 或账号切换流程。
 
 `gha auto` 不读取目录绑定来切换账号。它会读取当前仓库的 `origin`，例如 `https://github.com/zhongtait/gh-account.git` 会提取出 `github.com/zhongtait`，查找本地对应的 OAuth credential 和账号资料；如果没有本地登录 credential，则提示手动填写账号信息。
+
+`gha use` 和 `gha auto` 还会为生效范围配置 Git credential helper。该 helper 从 `gha` 的加密凭据存储读取当前账号的 token，因此外部执行的 `git pull`、`git fetch` 和 `git push` 不会继续使用系统钥匙串中的其他 GitHub 账号。配置只保存 helper 命令和账号标识，不会把 token 写进 remote URL 或 Git 配置。
+
+这套认证同步适用于 HTTPS remote。SSH remote 仍由 SSH key、`ssh-agent` 或 `core.sshCommand` 决定，不能通过 GitHub OAuth token 切换。
 
 未登录时会提供两个选项：
 

@@ -36,6 +36,11 @@ type Client interface {
 	CurrentBranch(ctx context.Context) (string, error)
 }
 
+// CredentialClient configures Git's credential helper for a scope.
+type CredentialClient interface {
+	SetCredentialHelper(ctx context.Context, scope Scope, command, accountKey string) error
+}
+
 // NativeClient implements the subset of Git repository/config operations
 // required by gha without invoking the git executable.
 type NativeClient struct {
@@ -85,6 +90,25 @@ func (c *NativeClient) SetIdentity(ctx context.Context, scope Scope, identity Id
 	}
 	file.set("user.name", identity.Name)
 	file.set("user.email", identity.Email)
+	return c.saveConfig(scope, file)
+}
+
+// SetCredentialHelper configures gha as the only credential helper for the
+// selected Git config scope. An empty helper value resets helpers inherited
+// from broader scopes, so a stale system credential cannot win first.
+func (c *NativeClient) SetCredentialHelper(ctx context.Context, scope Scope, command, accountKey string) error {
+	if strings.TrimSpace(command) == "" {
+		return errors.New("credential helper command is required")
+	}
+	if strings.TrimSpace(accountKey) == "" {
+		return errors.New("credential account key is required")
+	}
+	file, err := c.loadConfig(scope)
+	if err != nil {
+		return err
+	}
+	file.setMulti("credential.helper", []string{"", strings.TrimSpace(command)})
+	file.set("gha.account-key", strings.TrimSpace(accountKey))
 	return c.saveConfig(scope, file)
 }
 
@@ -308,6 +332,62 @@ func (f *gitConfig) set(wanted, value string) {
 		f.lines = append(f.lines, "")
 	}
 	f.lines = append(f.lines, "["+formatSection(section)+"]", formatted)
+}
+
+func (f *gitConfig) setMulti(wanted string, values []string) {
+	parts := strings.Split(wanted, ".")
+	section := strings.Join(parts[:len(parts)-1], ".")
+	key := parts[len(parts)-1]
+
+	filtered := make([]string, 0, len(f.lines)+len(values))
+	currentSection := ""
+	for _, line := range f.lines {
+		if match := sectionPattern.FindStringSubmatch(line); match != nil {
+			currentSection = canonicalSection(match[1])
+		}
+		match := keyPattern.FindStringSubmatch(strings.TrimSpace(line))
+		if match != nil && currentSection+"."+strings.ToLower(match[1]) == strings.ToLower(wanted) {
+			continue
+		}
+		filtered = append(filtered, line)
+	}
+	f.lines = filtered
+
+	formatted := make([]string, 0, len(values))
+	for _, value := range values {
+		formatted = append(formatted, key+" = "+quoteGitValue(value))
+	}
+
+	targetSection := canonicalSection(section)
+	sectionStart := -1
+	sectionEnd := len(f.lines)
+	currentSection = ""
+	for index, line := range f.lines {
+		if match := sectionPattern.FindStringSubmatch(line); match != nil {
+			if sectionStart >= 0 && sectionEnd == len(f.lines) {
+				sectionEnd = index
+			}
+			currentSection = canonicalSection(match[1])
+			if currentSection == targetSection {
+				sectionStart = index
+				sectionEnd = len(f.lines)
+			}
+		}
+	}
+	if sectionStart < 0 {
+		if len(f.lines) > 0 && strings.TrimSpace(f.lines[len(f.lines)-1]) != "" {
+			f.lines = append(f.lines, "")
+		}
+		f.lines = append(f.lines, "["+formatSection(section)+"]")
+		f.lines = append(f.lines, formatted...)
+		return
+	}
+
+	// Insert into the last matching section, after its existing contents.
+	insertAt := sectionEnd
+	f.lines = append(f.lines, make([]string, len(formatted))...)
+	copy(f.lines[insertAt+len(formatted):], f.lines[insertAt:len(f.lines)-len(formatted)])
+	copy(f.lines[insertAt:insertAt+len(formatted)], formatted)
 }
 
 func canonicalSection(section string) string {

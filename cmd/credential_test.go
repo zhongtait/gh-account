@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -79,9 +80,15 @@ func TestCredentialHelperIgnoresOtherHostsAndOperations(t *testing.T) {
 }
 
 func TestCredentialHelperCommandUsesConfiguredStore(t *testing.T) {
-	store := config.NewStore("/tmp/gha config")
+	storeDir := filepath.Join(t.TempDir(), "gha config")
+	store := config.NewStore(storeDir)
 	command := credentialHelperCommand(store, config.Account{Hostname: "github.com", Login: "personal-user"})
-	if !strings.Contains(command, "--config-dir '/tmp/gha config'") || !strings.Contains(command, "--account-key 'github.com|personal-user'") {
+	absoluteDir, err := filepath.Abs(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedConfigDir := "--config-dir " + shellQuote(filepath.ToSlash(absoluteDir))
+	if !strings.Contains(command, expectedConfigDir) || !strings.Contains(command, "--account-key 'github.com|personal-user'") {
 		t.Fatalf("unexpected helper command: %s", command)
 	}
 }

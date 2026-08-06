@@ -11,10 +11,12 @@
 - 可选地按账号协议更新 `origin` remote
 - 根据当前 GitHub 仓库的 `origin` remote 自动选择账号
 - 提供登录、退出、编辑、诊断和 Shell completion
+- 通过指定账号或自动选择账号克隆 GitHub 仓库，并把账号凭据和 Git 身份写入新仓库的本地配置
 
 ## 环境要求
 
-- 不需要安装 GitHub CLI 或 Git；Git 仓库和配置由程序直接读写
+- 不需要安装 GitHub CLI；常规账号和配置操作由程序直接读写 Git 文件
+- 使用 `gha clone` 时需要额外安装 `git` 并确保它在 `PATH` 中
 - 从源码构建需要 Go 1.26.1 或更高版本（以 `go.mod` 为准）
 
 首次登录需要一个 GitHub OAuth App 的 public client ID，并在该 OAuth App 设置中启用 Device Flow。创建 OAuth App 后设置：
@@ -159,6 +161,8 @@ gha --config-dir "${HOME}/.config/gha-dev" list
 | `gha sync` | 根据当前 GitHub 账号同步 Git 身份 |
 | `gha auto` | 根据当前仓库 origin 自动选择账号，未登录时手动填写 |
 | `gha login <alias>` | 登录并保存账号配置 |
+| `gha clone <repo> use <alias>` | 使用指定账号克隆仓库并写入仓库本地配置 |
+| `gha clone <repo>` | 自动选择账号；没有可用凭据时进入 OAuth 登录 |
 | `gha logout <alias>` | 删除本地保存的指定 OAuth credential |
 | `gha edit [alias]` | 用 `$EDITOR` 编辑账号配置 |
 | `gha remote` | 查看或处理 remote |
@@ -171,7 +175,19 @@ gha --config-dir "${HOME}/.config/gha-dev" list
 gha use personal --global
 gha use personal --update-remote
 gha sync --global
+
+# 使用指定账号克隆私有仓库
+gha clone https://github.com/OWNER/PRIVATE_REPO.git use personal
+
+# 自动选择账号（auto 可以省略）
+gha clone https://github.com/OWNER/PRIVATE_REPO.git
 ```
+
+`gha clone` 需要系统中存在 `git` 可执行文件。HTTPS 克隆时，程序只在 Git
+进程中注入当前账号的 credential helper，不会把 access token 写入 remote URL；
+克隆成功后，账号对应的 helper、`user.name` 和 `user.email` 会写入新仓库的
+`.git/config`。`auto` 在现有凭据认证失败时会重新进入一次 OAuth 登录并重试。
+SSH 地址仍使用 SSH key，不使用 OAuth token。
 
 ## Shell completion
 

@@ -21,14 +21,14 @@
   "StringFileInfo": {
     "Comments": "GitHub multi-account management CLI",
     "CompanyName": "zhongtait",
-    "FileDescription": "GitHub Account Manager - Multi-account CLI tool",
+    "FileDescription": "gha - GitHub multi-account manager",
     "FileVersion": "0.5.0",
     "InternalName": "gha",
     "LegalCopyright": "Copyright (c) 2025 zhongtait. MIT License.",
     "LegalTrademarks": "",
     "OriginalFilename": "gha.exe",
     "PrivateBuild": "",
-    "ProductName": "gh-account",
+    "ProductName": "gha",
     "ProductVersion": "0.5.0",
     "SpecialBuild": ""
   },

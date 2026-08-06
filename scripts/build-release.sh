@@ -38,7 +38,16 @@ for target in "${targets[@]}"; do
   if [[ "${goos}" == "windows" ]]; then
     if command -v goversioninfo >/dev/null 2>&1; then
       echo "  嵌入 Windows 版本信息..."
-      (cd cmd/gha && goversioninfo -o resource.syso)
+      windows_version="${version#v}"
+      if [[ "${windows_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+        (cd cmd/gha && goversioninfo \
+          -file-version "${windows_version}" \
+          -product-version "${windows_version}" \
+          -propagate-ver-strings \
+          -o resource.syso)
+      else
+        (cd cmd/gha && goversioninfo -o resource.syso)
+      fi
     else
       echo "  警告: goversioninfo 未安装，跳过版本信息嵌入"
     fi

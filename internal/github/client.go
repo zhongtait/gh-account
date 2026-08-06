@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -17,7 +19,7 @@ import (
 
 const (
 	defaultHostname = "github.com"
-	defaultScope    = "read:user"
+	defaultScope    = "read:user,repo"
 )
 
 // Client abstracts GitHub authentication operations.
@@ -109,7 +111,7 @@ func (c *OAuthClient) CurrentLogin(ctx context.Context) (string, error) {
 func (c *OAuthClient) CurrentIdentity(ctx context.Context) (string, string, error) {
 	auth, err := c.Store.LoadAuth()
 	if err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("load auth: %w", err)
 	}
 	if auth.Active == "" {
 		return "", "", errors.New("no active GitHub OAuth account; run gha login")
@@ -120,7 +122,7 @@ func (c *OAuthClient) CurrentIdentity(ctx context.Context) (string, string, erro
 	}
 	user, err := c.getUser(ctx, credential)
 	if err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("get GitHub user: %w", err)
 	}
 	return user.Login, normalizeHostname(credential.Hostname), nil
 }
@@ -139,7 +141,7 @@ func (c *OAuthClient) SwitchUserAtHost(ctx context.Context, login string, hostna
 	}
 	auth, err := c.Store.LoadAuth()
 	if err != nil {
-		return err
+		return fmt.Errorf("load auth: %w", err)
 	}
 	hostname = strings.TrimSpace(hostname)
 	if hostname != "" {
@@ -160,7 +162,10 @@ func (c *OAuthClient) SwitchUserAtHost(ctx context.Context, login string, hostna
 	}
 	if match != "" {
 		auth.Active = match
-		return c.Store.SaveAuth(auth)
+		if err := c.Store.SaveAuth(auth); err != nil {
+			return fmt.Errorf("save auth: %w", err)
+		}
+		return nil
 	}
 	return fmt.Errorf("no OAuth credential found for GitHub account %q; run gha login", login)
 }
@@ -170,7 +175,7 @@ func (c *OAuthClient) SwitchUserAtHost(ctx context.Context, login string, hostna
 func (c *OAuthClient) HasCredential(ctx context.Context, login string, hostname string) (bool, error) {
 	auth, err := c.Store.LoadAuth()
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("load auth: %w", err)
 	}
 	credential, ok := auth.Credentials[credentialKey(hostname, login)]
 	return ok && strings.TrimSpace(credential.AccessToken) != "", nil
@@ -181,11 +186,11 @@ func (c *OAuthClient) HasCredential(ctx context.Context, login string, hostname 
 func (c *OAuthClient) Status(ctx context.Context) (string, error) {
 	login, err := c.CurrentLogin(ctx)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("get current login: %w", err)
 	}
 	auth, err := c.Store.LoadAuth()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("load auth: %w", err)
 	}
 	credential := auth.Credentials[auth.Active]
 	return fmt.Sprintf("Logged in to %s account %s (gha OAuth)", credential.Hostname, login), nil
@@ -210,6 +215,12 @@ func (c *OAuthClient) Login(ctx context.Context, hostname string, gitProtocol st
 	}
 	fmt.Fprintf(c.Output, "Open %s\n", verificationURI)
 	fmt.Fprintf(c.Output, "Enter code: %s\n", device.UserCode)
+
+	// Try to copy the user code to clipboard
+	if err := copyToClipboard(device.UserCode); err == nil {
+		fmt.Fprintln(c.Output, "Code copied to clipboard!")
+	}
+
 	if c.OpenBrowser != nil {
 		if err := c.OpenBrowser(verificationURI); err == nil {
 			fmt.Fprintln(c.Output, "Browser opened; complete authorization there.")
@@ -232,7 +243,7 @@ func (c *OAuthClient) Login(ctx context.Context, hostname string, gitProtocol st
 	key := credentialKey(hostname, token.Login)
 	auth, err := c.Store.LoadAuth()
 	if err != nil {
-		return err
+		return fmt.Errorf("load auth: %w", err)
 	}
 	auth.Credentials[key] = credential
 	auth.Active = key
@@ -248,7 +259,7 @@ func (c *OAuthClient) Logout(ctx context.Context, login string, hostname string)
 	hostname = normalizeHostname(hostname)
 	auth, err := c.Store.LoadAuth()
 	if err != nil {
-		return err
+		return fmt.Errorf("load auth: %w", err)
 	}
 	login = strings.TrimSpace(login)
 	removed := false
@@ -271,32 +282,38 @@ func (c *OAuthClient) Logout(ctx context.Context, login string, hostname string)
 	if !removed {
 		return fmt.Errorf("no stored OAuth credential found for %s", hostname)
 	}
-	return c.Store.SaveAuth(auth)
+	if err := c.Store.SaveAuth(auth); err != nil {
+		return fmt.Errorf("save auth: %w", err)
+	}
+	return nil
 }
 
 func (c *OAuthClient) getUser(ctx context.Context, credential config.Credential) (userResponse, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL(credential.Hostname, "/user"), nil)
 	if err != nil {
-		return userResponse{}, err
+		return userResponse{}, fmt.Errorf("create request: %w", err)
 	}
 	request.Header.Set("Accept", "application/vnd.github+json")
 	request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	request.Header.Set("Authorization", "Bearer "+credential.AccessToken)
 	response, err := c.httpClient().Do(request)
 	if err != nil {
-		return userResponse{}, err
+		return userResponse{}, fmt.Errorf("execute request: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		io.Copy(io.Discard, response.Body)
+		response.Body.Close()
+	}()
 	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {
-		return userResponse{}, err
+		return userResponse{}, fmt.Errorf("read response body: %w", err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return userResponse{}, fmt.Errorf("GitHub returned HTTP %d: %s", response.StatusCode, responseMessage(body))
 	}
 	var user userResponse
 	if err := json.Unmarshal(body, &user); err != nil {
-		return userResponse{}, err
+		return userResponse{}, fmt.Errorf("parse response: %w", err)
 	}
 	if strings.TrimSpace(user.Login) == "" {
 		return userResponse{}, errors.New("GitHub returned an empty login")
@@ -307,17 +324,23 @@ func (c *OAuthClient) getUser(ctx context.Context, credential config.Credential)
 func (c *OAuthClient) doForm(ctx context.Context, endpoint string, form url.Values) ([]byte, int, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, fmt.Errorf("create request: %w", err)
 	}
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	response, err := c.httpClient().Do(request)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, fmt.Errorf("execute request: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		io.Copy(io.Discard, response.Body)
+		response.Body.Close()
+	}()
 	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
-	return body, response.StatusCode, err
+	if err != nil {
+		return nil, 0, fmt.Errorf("read response body: %w", err)
+	}
+	return body, response.StatusCode, nil
 }
 
 func (c *OAuthClient) httpClient() *http.Client {
@@ -383,4 +406,48 @@ func wait(ctx context.Context, duration time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+func copyToClipboard(text string) error {
+	var cmd *exec.Cmd
+
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("pbcopy")
+	case "linux":
+		// Try xclip first, then xsel, then wl-copy (Wayland)
+		if _, err := exec.LookPath("xclip"); err == nil {
+			cmd = exec.Command("xclip", "-selection", "clipboard")
+		} else if _, err := exec.LookPath("xsel"); err == nil {
+			cmd = exec.Command("xsel", "--clipboard", "--input")
+		} else if _, err := exec.LookPath("wl-copy"); err == nil {
+			cmd = exec.Command("wl-copy")
+		} else {
+			return fmt.Errorf("no clipboard utility found")
+		}
+	case "windows":
+		cmd = exec.Command("clip")
+	default:
+		return fmt.Errorf("clipboard not supported")
+	}
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	if _, err := stdin.Write([]byte(text)); err != nil {
+		stdin.Close()
+		return err
+	}
+
+	if err := stdin.Close(); err != nil {
+		return err
+	}
+
+	return cmd.Wait()
 }

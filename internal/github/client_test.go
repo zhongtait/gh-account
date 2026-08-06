@@ -39,7 +39,7 @@ func TestLoginDeviceFlowStoresCredential(t *testing.T) {
 	transport := &fakeTransport{responses: []string{
 		`{"device_code":"device","user_code":"ABCD-EFGH","verification_uri":"https://github.com/login/device","verification_uri_complete":"https://github.com/login/device?user_code=ABCD-EFGH","expires_in":600,"interval":1}`,
 		`{"error":"authorization_pending"}`,
-		`{"access_token":"secret-token","token_type":"bearer","scope":"read:user"}`,
+		`{"access_token":"secret-token","token_type":"bearer","scope":"read:user,repo"}`,
 		`{"login":"personal-user"}`,
 	}}
 	store := config.NewStore(t.TempDir())

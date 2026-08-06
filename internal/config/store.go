@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/zhongtait/gh-account/internal/utils"
 	"gopkg.in/yaml.v3"
@@ -20,6 +21,7 @@ import (
 // Store loads and persists gha configuration files.
 type Store struct {
 	Dir string
+	mu  sync.RWMutex
 }
 
 // NewStore creates a store rooted at the given config directory.
@@ -65,6 +67,9 @@ func (s *Store) EnsureInitialized() error {
 
 // LoadAccounts reads accounts.yaml.
 func (s *Store) LoadAccounts() (AccountsFile, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	path := utils.AccountsPath(s.Dir)
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -87,6 +92,9 @@ func (s *Store) LoadAccounts() (AccountsFile, error) {
 
 // SaveAccounts writes accounts.yaml.
 func (s *Store) SaveAccounts(file AccountsFile) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if file.Accounts == nil {
 		file.Accounts = map[string]Account{}
 	}
@@ -95,6 +103,9 @@ func (s *Store) SaveAccounts(file AccountsFile) error {
 
 // LoadConfig reads config.yaml.
 func (s *Store) LoadConfig() (ConfigFile, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	path := utils.ConfigPath(s.Dir)
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -115,6 +126,9 @@ func (s *Store) LoadConfig() (ConfigFile, error) {
 
 // SaveConfig writes config.yaml.
 func (s *Store) SaveConfig(file ConfigFile) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if file.DefaultScope == "" {
 		file.DefaultScope = "local"
 	}
@@ -124,6 +138,9 @@ func (s *Store) SaveConfig(file ConfigFile) error {
 // LoadAuth reads the local OAuth credential store. Missing auth.yaml is
 // treated as an empty store so existing installations upgrade seamlessly.
 func (s *Store) LoadAuth() (AuthFile, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	path := utils.AuthPath(s.Dir)
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -174,6 +191,9 @@ func (s *Store) GetCredential(hostname, login string) (Credential, bool, error) 
 
 // SaveAuth writes OAuth credentials with owner-only permissions.
 func (s *Store) SaveAuth(file AuthFile) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if file.Credentials == nil {
 		file.Credentials = map[string]Credential{}
 	}
@@ -232,25 +252,25 @@ func (s *Store) authKey(create bool) ([]byte, error) {
 			return nil, errors.New("auth.key must contain 32 bytes")
 		}
 		if chmodErr := os.Chmod(path, 0o600); chmodErr != nil {
-			return nil, chmodErr
+			return nil, fmt.Errorf("set auth key permissions: %w", chmodErr)
 		}
 		return data, nil
 	}
 	if !errors.Is(err, os.ErrNotExist) || !create {
-		return nil, err
+		return nil, fmt.Errorf("read auth key: %w", err)
 	}
 	data = make([]byte, 32)
 	if _, err := io.ReadFull(rand.Reader, data); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("generate auth key: %w", err)
 	}
 	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create config directory: %w", err)
 	}
 	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("write auth key: %w", err)
 	}
 	if err := os.Chmod(path, 0o600); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("set auth key permissions: %w", err)
 	}
 	return data, nil
 }
@@ -258,19 +278,19 @@ func (s *Store) authKey(create bool) ([]byte, error) {
 func (s *Store) encryptToken(aad, token string) (string, error) {
 	key, err := s.authKey(true)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("get auth key: %w", err)
 	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("create cipher: %w", err)
 	}
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("create GCM: %w", err)
 	}
 	nonce := make([]byte, gcm.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return "", err
+		return "", fmt.Errorf("generate nonce: %w", err)
 	}
 	ciphertext := gcm.Seal(nonce, nonce, []byte(token), []byte(aad))
 	return "v1:" + base64.RawStdEncoding.EncodeToString(ciphertext), nil
@@ -282,19 +302,19 @@ func (s *Store) decryptToken(aad, encoded string) (string, error) {
 	}
 	key, err := s.authKey(false)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("get auth key: %w", err)
 	}
 	data, err := base64.RawStdEncoding.DecodeString(strings.TrimPrefix(encoded, "v1:"))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("decode token: %w", err)
 	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("create cipher: %w", err)
 	}
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("create GCM: %w", err)
 	}
 	if len(data) < gcm.NonceSize() {
 		return "", errors.New("encrypted token is truncated")

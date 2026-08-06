@@ -65,7 +65,7 @@ func (c *NativeClient) IsRepo(ctx context.Context) (bool, error) {
 func (c *NativeClient) TopLevel(ctx context.Context) (string, error) {
 	root, _, found, err := c.repo()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("check git repository: %w", err)
 	}
 	if !found {
 		return "", errors.New("not inside a git repository")
@@ -77,7 +77,7 @@ func (c *NativeClient) TopLevel(ctx context.Context) (string, error) {
 func (c *NativeClient) GetIdentity(ctx context.Context, scope Scope) (Identity, error) {
 	file, err := c.loadConfig(scope)
 	if err != nil {
-		return Identity{}, err
+		return Identity{}, fmt.Errorf("load git config: %w", err)
 	}
 	return Identity{Name: file.get("user.name"), Email: file.get("user.email")}, nil
 }
@@ -86,11 +86,14 @@ func (c *NativeClient) GetIdentity(ctx context.Context, scope Scope) (Identity, 
 func (c *NativeClient) SetIdentity(ctx context.Context, scope Scope, identity Identity) error {
 	file, err := c.loadConfig(scope)
 	if err != nil {
-		return err
+		return fmt.Errorf("load git config: %w", err)
 	}
 	file.set("user.name", identity.Name)
 	file.set("user.email", identity.Email)
-	return c.saveConfig(scope, file)
+	if err := c.saveConfig(scope, file); err != nil {
+		return fmt.Errorf("save git config: %w", err)
+	}
+	return nil
 }
 
 // SetCredentialHelper configures gha as the only credential helper for the
@@ -105,11 +108,14 @@ func (c *NativeClient) SetCredentialHelper(ctx context.Context, scope Scope, com
 	}
 	file, err := c.loadConfig(scope)
 	if err != nil {
-		return err
+		return fmt.Errorf("load git config: %w", err)
 	}
 	file.setMulti("credential.helper", []string{"", strings.TrimSpace(command)})
 	file.set("gha.account-key", strings.TrimSpace(accountKey))
-	return c.saveConfig(scope, file)
+	if err := c.saveConfig(scope, file); err != nil {
+		return fmt.Errorf("save git config: %w", err)
+	}
+	return nil
 }
 
 // GetRemoteURL returns a remote URL.
@@ -119,7 +125,7 @@ func (c *NativeClient) GetRemoteURL(ctx context.Context, name string) (string, e
 	}
 	file, err := c.loadConfig(ScopeLocal)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("load git config: %w", err)
 	}
 	value := file.get("remote." + strings.ToLower(strings.TrimSpace(name)) + ".url")
 	if value == "" {
@@ -142,10 +148,13 @@ func (c *NativeClient) SetRemoteURL(ctx context.Context, name, remoteURL string)
 	}
 	file, err := c.loadConfig(ScopeLocal)
 	if err != nil {
-		return err
+		return fmt.Errorf("load git config: %w", err)
 	}
 	file.set("remote."+strings.ToLower(name)+".url", strings.TrimSpace(remoteURL))
-	return c.saveConfig(ScopeLocal, file)
+	if err := c.saveConfig(ScopeLocal, file); err != nil {
+		return fmt.Errorf("save git config: %w", err)
+	}
+	return nil
 }
 
 // CurrentBranch returns the symbolic branch from HEAD. Detached HEAD returns
@@ -153,14 +162,14 @@ func (c *NativeClient) SetRemoteURL(ctx context.Context, name, remoteURL string)
 func (c *NativeClient) CurrentBranch(ctx context.Context) (string, error) {
 	_, gitDir, found, err := c.repo()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("check git repository: %w", err)
 	}
 	if !found {
 		return "", errors.New("not inside a git repository")
 	}
 	data, err := os.ReadFile(filepath.Join(gitDir, "HEAD"))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("read HEAD: %w", err)
 	}
 	head := strings.TrimSpace(string(data))
 	const prefix = "ref: refs/heads/"
@@ -173,7 +182,7 @@ func (c *NativeClient) CurrentBranch(ctx context.Context) (string, error) {
 func (c *NativeClient) repo() (root, gitDir string, found bool, err error) {
 	start, err := filepath.Abs(c.Dir)
 	if err != nil {
-		return "", "", false, err
+		return "", "", false, fmt.Errorf("get absolute path: %w", err)
 	}
 	if info, statErr := os.Stat(start); statErr == nil && !info.IsDir() {
 		start = filepath.Dir(start)
@@ -187,7 +196,7 @@ func (c *NativeClient) repo() (root, gitDir string, found bool, err error) {
 			}
 			data, readErr := os.ReadFile(marker)
 			if readErr != nil {
-				return "", "", false, readErr
+				return "", "", false, fmt.Errorf("read .git file: %w", readErr)
 			}
 			line := strings.TrimSpace(string(data))
 			if strings.HasPrefix(strings.ToLower(line), "gitdir:") {
@@ -200,7 +209,7 @@ func (c *NativeClient) repo() (root, gitDir string, found bool, err error) {
 			return "", "", false, errors.New("invalid .git file")
 		}
 		if !errors.Is(statErr, os.ErrNotExist) {
-			return "", "", false, statErr
+			return "", "", false, fmt.Errorf("stat .git: %w", statErr)
 		}
 		parent := filepath.Dir(current)
 		if parent == current {
@@ -214,7 +223,7 @@ func (c *NativeClient) configPath(scope Scope) (string, error) {
 	case ScopeLocal:
 		_, gitDir, found, err := c.repo()
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("check git repository: %w", err)
 		}
 		if !found {
 			return "", errors.New("not inside a git repository")
@@ -226,7 +235,7 @@ func (c *NativeClient) configPath(scope Scope) (string, error) {
 		}
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("get home directory: %w", err)
 		}
 		if xdg := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdg != "" {
 			return filepath.Join(xdg, "git", "config"), nil
@@ -240,24 +249,31 @@ func (c *NativeClient) configPath(scope Scope) (string, error) {
 func (c *NativeClient) loadConfig(scope Scope) (gitConfig, error) {
 	path, err := c.configPath(scope)
 	if err != nil {
-		return gitConfig{}, err
+		return gitConfig{}, fmt.Errorf("get config path: %w", err)
 	}
-	return readGitConfig(path)
+	config, err := readGitConfig(path)
+	if err != nil {
+		return gitConfig{}, fmt.Errorf("read git config from %s: %w", path, err)
+	}
+	return config, nil
 }
 
 func (c *NativeClient) saveConfig(scope Scope, file gitConfig) error {
 	path, err := c.configPath(scope)
 	if err != nil {
-		return err
+		return fmt.Errorf("get config path: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+		return fmt.Errorf("create config directory: %w", err)
 	}
 	data := strings.Join(file.lines, "\n")
 	if !strings.HasSuffix(data, "\n") {
 		data += "\n"
 	}
-	return os.WriteFile(path, []byte(data), 0o644)
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		return fmt.Errorf("write git config to %s: %w", path, err)
+	}
+	return nil
 }
 
 type gitConfig struct {
@@ -275,7 +291,7 @@ func readGitConfig(path string) (gitConfig, error) {
 		return gitConfig{lines: []string{}}, nil
 	}
 	if err != nil {
-		return gitConfig{}, err
+		return gitConfig{}, fmt.Errorf("read file: %w", err)
 	}
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	lines := []string{}
@@ -283,7 +299,7 @@ func readGitConfig(path string) (gitConfig, error) {
 		lines = append(lines, strings.TrimSuffix(scanner.Text(), "\r"))
 	}
 	if err := scanner.Err(); err != nil {
-		return gitConfig{}, err
+		return gitConfig{}, fmt.Errorf("scan config file: %w", err)
 	}
 	return gitConfig{lines: lines}, nil
 }

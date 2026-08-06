@@ -8,7 +8,14 @@ DIST?=dist
 all: test build
 
 build:
+	@if [ "$(GOOS)" = "windows" ]; then \
+		echo "Building for Windows with version info..."; \
+		cd cmd/gha && goversioninfo -o resource.syso; \
+	fi
 	$(GO) build -ldflags "-X github.com/zhongtait/gh-account/cmd.version=$(VERSION)" -o bin/$(APP) ./cmd/gha
+	@if [ "$(GOOS)" = "windows" ]; then \
+		rm -f cmd/gha/resource.syso; \
+	fi
 
 run:
 	$(GO) run ./cmd/gha

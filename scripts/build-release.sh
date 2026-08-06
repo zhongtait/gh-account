@@ -33,10 +33,26 @@ for target in "${targets[@]}"; do
   binary="${build_dir}/${name}/${app}${suffix}"
   mkdir -p "$(dirname "${binary}")"
   echo "构建 ${goos}/${goarch} -> ${name}.${archive_ext}"
+
+  # Windows 构建时嵌入版本信息
+  if [[ "${goos}" == "windows" ]]; then
+    if command -v goversioninfo >/dev/null 2>&1; then
+      echo "  嵌入 Windows 版本信息..."
+      (cd cmd/gha && goversioninfo -o resource.syso)
+    else
+      echo "  警告: goversioninfo 未安装，跳过版本信息嵌入"
+    fi
+  fi
+
   GOOS="${goos}" GOARCH="${goarch}" go build \
     -trimpath \
     -ldflags "-s -w -X ${module}.version=${version}" \
     -o "${binary}" ./cmd/gha
+
+  # 清理临时文件
+  if [[ "${goos}" == "windows" ]] && [[ -f cmd/gha/resource.syso ]]; then
+    rm -f cmd/gha/resource.syso
+  fi
 
   if [[ "${archive_ext}" == "zip" ]]; then
     (cd "$(dirname "${binary}")" && zip -q -r "../../${name}.zip" "${app}${suffix}")

@@ -1,0 +1,38 @@
+name: Package binaries
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Build release archives
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install goversioninfo
+        run: |
+          go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Build archives
+        env:
+          DIST: dist
+        run: ./scripts/build-release.sh "${GITHUB_SHA::7}"
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: gh-account-${{ github.run_number }}-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14

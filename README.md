@@ -38,7 +38,7 @@ Windows Defender 可能会误报该程序为潜在威胁。这是因为：
 ### 登录账号
 
 ```bash
-gh-account login
+gha login
 ```
 
 验证码会自动复制到剪贴板，在浏览器中粘贴即可。
@@ -46,13 +46,13 @@ gh-account login
 ### 查看当前账号
 
 ```bash
-gh-account whoami
+gha whoami
 ```
 
 ### 切换账号
 
 ```bash
-gh-account switch <username>
+gha switch <username>
 ```
 
 ### 自动切换
@@ -61,7 +61,7 @@ gh-account switch <username>
 
 ```bash
 cd ~/work/company-project
-gh-account switch work-account
+gha switch work-account
 ```
 
 下次在该目录下进行 Git 操作时，会自动使用 `work-account`。
@@ -69,7 +69,7 @@ gh-account switch work-account
 ### 登出账号
 
 ```bash
-gh-account logout [username]
+gha logout [username]
 ```
 
 ## 工作原理
@@ -78,6 +78,19 @@ gh-account logout [username]
 2. 将凭据存储在 `~/.config/gh-account/credentials.json`
 3. 配置 Git credential helper 自动提供凭据
 4. 根据当前目录自动选择对应账号
+
+## 常见问题
+
+### Git 操作提示权限不足
+
+如果你之前登录过，需要重新登录以获取 `repo` 权限：
+
+```bash
+gha logout
+gha login
+```
+
+新的登录会请求 `read:user,repo` 权限，这样 git 操作就能正常使用了。
 
 ## 安全性
 

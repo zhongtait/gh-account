@@ -75,6 +75,7 @@ func NewRootCommand() *cobra.Command {
 	root.AddCommand(newEditCmd())
 	root.AddCommand(newRemoteCmd())
 	root.AddCommand(newAutoCmd())
+	root.AddCommand(newCloneCmd())
 	root.AddCommand(newCredentialHelperCmd())
 	root.AddCommand(newCompletionCmd())
 	root.AddCommand(newVersionCmd())

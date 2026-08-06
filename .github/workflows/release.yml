@@ -1,65 +1,87 @@
-name: release
+name: Build and Release
 
 on:
   push:
     tags:
-      - "v*"
-  workflow_dispatch:
-    inputs:
-      version:
-        description: "Release version, for example v1.2.0"
-        required: true
-        type: string
+      - 'v*'
 
 permissions:
   contents: write
 
 jobs:
-  test:
-    name: Test
+  build:
+    name: Build binaries
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
-          cache: true
-      - name: Run tests
-        run: go test ./...
-      - name: Run vet
-        run: go vet ./...
+          go-version: '1.21'
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          mkdir -p dist
+          if [ "$GOOS" = "windows" ]; then
+            go build -ldflags="-s -w" -o dist/gh-account-${{ matrix.goos }}-${{ matrix.goarch }}.exe ./cmd/gha
+          else
+            go build -ldflags="-s -w" -o dist/gh-account-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/gha
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gh-account-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
 
   release:
-    name: Build and publish
+    name: Create Release
+    needs: build
     runs-on: ubuntu-latest
-    needs: test
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
         with:
-          go-version-file: go.mod
-          cache: true
-      - name: Resolve version
-        id: version
-        shell: bash
-        run: |
-          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            version="${GITHUB_REF_NAME}"
-          else
-            version="${{ inputs.version }}"
-          fi
-          echo "version=${version}" >> "${GITHUB_OUTPUT}"
-      - name: Build release archives
-        run: make release VERSION="${{ steps.version.outputs.version }}"
-      - name: Publish GitHub Release
+          path: dist
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/**/*
+          generate_release_notes: true
+          body: |
+            ## 安装说明
+
+            下载对应平台的二进制文件，重命名为 `gh-account`（Windows 为 `gh-account.exe`），然后添加到 PATH。
+
+            ### Windows 用户注意
+
+            Windows Defender 可能会误报该程序。这是因为 Go 静态编译和网络操作导致的误报。
+
+            你可以：
+            - 在 Windows Defender 中添加排除项
+            - 查看源代码确认安全性
+            - 从源码自行编译
+
+            我们已向 Microsoft 提交误报申请。
         env:
-          GH_TOKEN: "${{ github.token }}"
-        run: |
-          gh release create "${{ steps.version.outputs.version }}" \
-            dist/*.tar.gz dist/*.zip dist/SHA256SUMS \
-            --title "gha ${{ steps.version.outputs.version }}" \
-            --generate-notes
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

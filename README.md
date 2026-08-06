@@ -80,13 +80,13 @@ sha256sum -c SHA256SUMS --ignore-missing
 也可以使用安装脚本自动识别 macOS/Linux 和 CPU 架构，并安装到 `~/.local/bin`：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zhongtait/gh-account/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/zhongtait/gh-account/refs/heads/master/scripts/install.sh | bash
 ```
 
 安装指定版本：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zhongtait/gh-account/main/scripts/install.sh | bash -s -- v1.0.0
+curl -fsSL https://raw.githubusercontent.com/zhongtait/gh-account/refs/heads/master/scripts/install.sh | bash -s -- v1.0.0
 ```
 
 脚本会校验 `SHA256SUMS`，但不会自动修改 shell 配置文件；如果安装目录不在 `PATH`，按脚本输出将 `~/.local/bin` 加入 `~/.zshrc` 或 `~/.bashrc`。

@@ -37,6 +37,11 @@ var (
 	flagNoBrowser    bool
 	flagGlobal       bool
 	flagUpdateRemote bool
+
+	commandConfigDir  = utils.ConfigDir
+	commandExpandHome = utils.ExpandHome
+	commandGetwd      = os.Getwd
+	commandStat       = os.Stat
 )
 
 // Execute runs the root command.
@@ -87,18 +92,18 @@ func setupDeps(cmd *cobra.Command) error {
 	dir := flagConfigDir
 	var err error
 	if dir == "" {
-		dir, err = utils.ConfigDir()
+		dir, err = commandConfigDir()
 		if err != nil {
 			return err
 		}
 	} else {
-		dir, err = utils.ExpandHome(dir)
+		dir, err = commandExpandHome(dir)
 		if err != nil {
 			return err
 		}
 	}
 
-	cwd, err := os.Getwd()
+	cwd, err := commandGetwd()
 	if err != nil {
 		return err
 	}
@@ -132,7 +137,7 @@ func setupDeps(cmd *cobra.Command) error {
 
 func requireInitialized() error {
 	accountsPath := utils.AccountsPath(deps.Store.Dir)
-	if _, err := os.Stat(accountsPath); err != nil {
+	if _, err := commandStat(accountsPath); err != nil {
 		return fmt.Errorf("config not initialized; run %s first", terminal.Bold("gha init"))
 	}
 	return nil
@@ -162,12 +167,10 @@ func ensureOAuthClientID(reader *bufio.Reader) error {
 	}
 	client.SetClientID(clientID)
 
-	cfg, err := deps.Store.LoadConfig()
-	if err != nil {
-		return err
-	}
-	cfg.OAuthClientID = clientID
-	if err := deps.Store.SaveConfig(cfg); err != nil {
+	if err := deps.Store.UpdateConfig(func(cfg *config.ConfigFile) error {
+		cfg.OAuthClientID = clientID
+		return nil
+	}); err != nil {
 		return fmt.Errorf("save GitHub OAuth client ID: %w", err)
 	}
 	return nil

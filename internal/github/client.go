@@ -9,11 +9,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
-	"runtime"
 	"strings"
 	"time"
 
+	"github.com/zhongtait/gh-account/internal/clipboard"
 	"github.com/zhongtait/gh-account/internal/config"
 )
 
@@ -67,6 +66,11 @@ type OAuthClient struct {
 	ClientID    string
 	OpenBrowser BrowserOpener
 }
+
+var (
+	newRequestWithContext = http.NewRequestWithContext
+	copyToClipboard       = clipboard.Copy
+)
 
 // NewOAuthClient creates a self-contained GitHub OAuth client.
 func NewOAuthClient(store *config.Store, output io.Writer, clientID string) *OAuthClient {
@@ -139,46 +143,50 @@ func (c *OAuthClient) SwitchUserAtHost(ctx context.Context, login string, hostna
 	if login == "" {
 		return errors.New("login is required")
 	}
-	auth, err := c.Store.LoadAuth()
-	if err != nil {
-		return fmt.Errorf("load auth: %w", err)
-	}
 	hostname = strings.TrimSpace(hostname)
 	if hostname != "" {
 		hostname = normalizeHostname(hostname)
 	}
-	var match string
-	for key, credential := range auth.Credentials {
-		if !strings.EqualFold(credential.Login, login) {
-			continue
+	var updateErr error
+	err := c.Store.UpdateAuth(func(auth *config.AuthFile) error {
+		var match string
+		for key, credential := range auth.Credentials {
+			if !strings.EqualFold(credential.Login, login) {
+				continue
+			}
+			if hostname != "" && !strings.EqualFold(normalizeHostname(credential.Hostname), hostname) {
+				continue
+			}
+			if match != "" {
+				updateErr = fmt.Errorf("multiple OAuth credentials found for %q; specify its GitHub host", login)
+				return updateErr
+			}
+			match = key
 		}
-		if hostname != "" && !strings.EqualFold(credential.Hostname, hostname) {
-			continue
+		if match == "" {
+			updateErr = fmt.Errorf("no OAuth credential found for GitHub account %q; run gha login", login)
+			return updateErr
 		}
-		if match != "" {
-			return fmt.Errorf("multiple OAuth credentials found for %q; specify its GitHub host", login)
-		}
-		match = key
-	}
-	if match != "" {
 		auth.Active = match
-		if err := c.Store.SaveAuth(auth); err != nil {
-			return fmt.Errorf("save auth: %w", err)
-		}
 		return nil
+	})
+	if err != nil {
+		if updateErr != nil {
+			return updateErr
+		}
+		return fmt.Errorf("save auth: %w", err)
 	}
-	return fmt.Errorf("no OAuth credential found for GitHub account %q; run gha login", login)
+	return nil
 }
 
 // HasCredential reports whether the requested account has been authenticated
 // locally, without making a network request.
 func (c *OAuthClient) HasCredential(ctx context.Context, login string, hostname string) (bool, error) {
-	auth, err := c.Store.LoadAuth()
+	_, found, err := c.Store.GetCredential(hostname, login)
 	if err != nil {
 		return false, fmt.Errorf("load auth: %w", err)
 	}
-	credential, ok := auth.Credentials[credentialKey(hostname, login)]
-	return ok && strings.TrimSpace(credential.AccessToken) != "", nil
+	return found, nil
 }
 
 // Status returns a safe, human-readable authentication status without
@@ -241,13 +249,11 @@ func (c *OAuthClient) Login(ctx context.Context, hostname string, gitProtocol st
 		Scope:       token.Scope,
 	}
 	key := credentialKey(hostname, token.Login)
-	auth, err := c.Store.LoadAuth()
-	if err != nil {
-		return fmt.Errorf("load auth: %w", err)
-	}
-	auth.Credentials[key] = credential
-	auth.Active = key
-	if err := c.Store.SaveAuth(auth); err != nil {
+	if err := c.Store.UpdateAuth(func(auth *config.AuthFile) error {
+		auth.Credentials[key] = credential
+		auth.Active = key
+		return nil
+	}); err != nil {
 		return fmt.Errorf("save GitHub OAuth credential: %w", err)
 	}
 	return nil
@@ -257,39 +263,38 @@ func (c *OAuthClient) Login(ctx context.Context, hostname string, gitProtocol st
 // credential for the requested host is removed; other accounts remain usable.
 func (c *OAuthClient) Logout(ctx context.Context, login string, hostname string) error {
 	hostname = normalizeHostname(hostname)
-	auth, err := c.Store.LoadAuth()
-	if err != nil {
-		return fmt.Errorf("load auth: %w", err)
-	}
 	login = strings.TrimSpace(login)
-	removed := false
-	for key, credential := range auth.Credentials {
-		if !strings.EqualFold(credential.Hostname, hostname) {
-			continue
+	var removed bool
+	err := c.Store.UpdateAuth(func(auth *config.AuthFile) error {
+		for key, credential := range auth.Credentials {
+			if !strings.EqualFold(normalizeHostname(credential.Hostname), hostname) {
+				continue
+			}
+			if login != "" && !strings.EqualFold(credential.Login, login) {
+				continue
+			}
+			delete(auth.Credentials, key)
+			if auth.Active == key {
+				auth.Active = ""
+			}
+			removed = true
+			if login != "" {
+				break
+			}
 		}
-		if login != "" && !strings.EqualFold(credential.Login, login) {
-			continue
+		if !removed {
+			return fmt.Errorf("no stored OAuth credential found for %s", hostname)
 		}
-		delete(auth.Credentials, key)
-		if auth.Active == key {
-			auth.Active = ""
-		}
-		removed = true
-		if login != "" {
-			break
-		}
-	}
-	if !removed {
-		return fmt.Errorf("no stored OAuth credential found for %s", hostname)
-	}
-	if err := c.Store.SaveAuth(auth); err != nil {
-		return fmt.Errorf("save auth: %w", err)
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	return nil
 }
 
 func (c *OAuthClient) getUser(ctx context.Context, credential config.Credential) (userResponse, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL(credential.Hostname, "/user"), nil)
+	request, err := newRequestWithContext(ctx, http.MethodGet, apiURL(credential.Hostname, "/user"), nil)
 	if err != nil {
 		return userResponse{}, fmt.Errorf("create request: %w", err)
 	}
@@ -322,7 +327,7 @@ func (c *OAuthClient) getUser(ctx context.Context, credential config.Credential)
 }
 
 func (c *OAuthClient) doForm(ctx context.Context, endpoint string, form url.Values) ([]byte, int, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+	request, err := newRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, 0, fmt.Errorf("create request: %w", err)
 	}
@@ -352,13 +357,17 @@ func (c *OAuthClient) httpClient() *http.Client {
 
 func normalizeHostname(hostname string) string {
 	hostname = strings.TrimSpace(hostname)
-	hostname = strings.TrimPrefix(hostname, "https://")
-	hostname = strings.TrimPrefix(hostname, "http://")
+	lower := strings.ToLower(hostname)
+	if strings.HasPrefix(lower, "https://") {
+		hostname = hostname[len("https://"):]
+	} else if strings.HasPrefix(lower, "http://") {
+		hostname = hostname[len("http://"):]
+	}
 	hostname = strings.TrimSuffix(hostname, "/")
 	if hostname == "" {
 		return defaultHostname
 	}
-	return hostname
+	return strings.ToLower(hostname)
 }
 
 func oauthURL(hostname, path string) string {
@@ -374,7 +383,7 @@ func apiURL(hostname, path string) string {
 }
 
 func credentialKey(hostname, login string) string {
-	return normalizeHostname(hostname) + "|" + strings.ToLower(strings.TrimSpace(login))
+	return strings.ToLower(normalizeHostname(hostname)) + "|" + strings.ToLower(strings.TrimSpace(login))
 }
 
 func responseMessage(body []byte) string {
@@ -406,48 +415,4 @@ func wait(ctx context.Context, duration time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
-}
-
-func copyToClipboard(text string) error {
-	var cmd *exec.Cmd
-
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("pbcopy")
-	case "linux":
-		// Try xclip first, then xsel, then wl-copy (Wayland)
-		if _, err := exec.LookPath("xclip"); err == nil {
-			cmd = exec.Command("xclip", "-selection", "clipboard")
-		} else if _, err := exec.LookPath("xsel"); err == nil {
-			cmd = exec.Command("xsel", "--clipboard", "--input")
-		} else if _, err := exec.LookPath("wl-copy"); err == nil {
-			cmd = exec.Command("wl-copy")
-		} else {
-			return fmt.Errorf("no clipboard utility found")
-		}
-	case "windows":
-		cmd = exec.Command("clip")
-	default:
-		return fmt.Errorf("clipboard not supported")
-	}
-
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return err
-	}
-
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-
-	if _, err := stdin.Write([]byte(text)); err != nil {
-		stdin.Close()
-		return err
-	}
-
-	if err := stdin.Close(); err != nil {
-		return err
-	}
-
-	return cmd.Wait()
 }

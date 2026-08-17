@@ -103,7 +103,7 @@ func Build(info Info) (string, error) {
 func splitOwnerRepo(path string) (string, string, error) {
 	path = strings.Trim(path, "/")
 	parts := strings.Split(path, "/")
-	if len(parts) < 2 {
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return "", "", fmt.Errorf("invalid owner/repo path: %s", path)
 	}
 	return parts[0], parts[1], nil

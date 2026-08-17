@@ -7,13 +7,18 @@ import (
 	"strings"
 )
 
+var (
+	userHomeDir = os.UserHomeDir
+	runtimeGOOS = runtime.GOOS
+)
+
 // ExpandHome expands a leading ~ to the user home directory.
 func ExpandHome(path string) (string, error) {
 	if path == "" {
 		return path, nil
 	}
 	if path == "~" || strings.HasPrefix(path, "~/") || strings.HasPrefix(path, `~\`) {
-		home, err := os.UserHomeDir()
+		home, err := userHomeDir()
 		if err != nil {
 			return "", err
 		}
@@ -31,12 +36,12 @@ func ConfigDir() (string, error) {
 		return ExpandHome(custom)
 	}
 
-	home, err := os.UserHomeDir()
+	home, err := userHomeDir()
 	if err != nil {
 		return "", err
 	}
 
-	if runtime.GOOS == "windows" {
+	if runtimeGOOS == "windows" {
 		if base := os.Getenv("APPDATA"); base != "" {
 			return filepath.Join(base, "gha"), nil
 		}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
+	"github.com/zhongtait/gh-account/internal/config"
 	"github.com/zhongtait/gh-account/internal/git"
 	"github.com/zhongtait/gh-account/internal/terminal"
 )
@@ -29,19 +30,16 @@ func newSyncCmd() *cobra.Command {
 			}
 
 			var alias string
-			for name, acc := range file.Accounts {
-				if sameGitHubAccount(login, hostname, acc.Login, acc.Hostname) {
+			var account config.Account
+			for name, candidate := range file.Accounts {
+				if sameGitHubAccount(login, hostname, candidate.Login, candidate.Hostname) {
 					alias = name
+					account = candidate
 					break
 				}
 			}
 			if alias == "" {
 				return fmt.Errorf("no configured account matches active login %q; run gha add", login)
-			}
-
-			acc, err := deps.Store.GetAccount(alias)
-			if err != nil {
-				return err
 			}
 
 			cfg, err := deps.Store.LoadConfig()
@@ -63,12 +61,12 @@ func newSyncCmd() *cobra.Command {
 				}
 			}
 
-			if err := deps.Git.SetIdentity(ctx, scope, git.Identity{Name: acc.GitName, Email: acc.Email}); err != nil {
+			if err := deps.Git.SetIdentity(ctx, scope, git.Identity{Name: account.GitName, Email: account.Email}); err != nil {
 				return err
 			}
 
 			terminal.Success(deps.Stdout, "Synced git identity from %s (%s)", alias, login)
-			return printCurrentSummary(cmd, alias, acc, scope)
+			return printCurrentSummary(cmd, alias, account, scope)
 		},
 	}
 

@@ -5,10 +5,31 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+)
+
+type gitLockFile interface {
+	Chmod(os.FileMode) error
+	WriteString(string) (int, error)
+	Sync() error
+	Close() error
+}
+
+var (
+	gitAbs         = filepath.Abs
+	gitStat        = os.Stat
+	gitReadFile    = os.ReadFile
+	gitUserHomeDir = os.UserHomeDir
+	gitMkdirAll    = os.MkdirAll
+	gitOpenFile    = func(name string, flag int, perm os.FileMode) (gitLockFile, error) {
+		return os.OpenFile(name, flag, perm)
+	}
+	gitRemove = os.Remove
+	gitRename = os.Rename
 )
 
 // Scope controls whether git config is written locally or globally.
@@ -84,13 +105,10 @@ func (c *NativeClient) GetIdentity(ctx context.Context, scope Scope) (Identity, 
 
 // SetIdentity writes user.name and user.email for the given scope.
 func (c *NativeClient) SetIdentity(ctx context.Context, scope Scope, identity Identity) error {
-	file, err := c.loadConfig(scope)
-	if err != nil {
-		return fmt.Errorf("load git config: %w", err)
-	}
-	file.set("user.name", identity.Name)
-	file.set("user.email", identity.Email)
-	if err := c.saveConfig(scope, file); err != nil {
+	if err := c.updateConfig(scope, func(file *gitConfig) {
+		file.set("user.name", identity.Name)
+		file.set("user.email", identity.Email)
+	}); err != nil {
 		return fmt.Errorf("save git config: %w", err)
 	}
 	return nil
@@ -106,13 +124,10 @@ func (c *NativeClient) SetCredentialHelper(ctx context.Context, scope Scope, com
 	if strings.TrimSpace(accountKey) == "" {
 		return errors.New("credential account key is required")
 	}
-	file, err := c.loadConfig(scope)
-	if err != nil {
-		return fmt.Errorf("load git config: %w", err)
-	}
-	file.setMulti("credential.helper", []string{"", strings.TrimSpace(command)})
-	file.set("gha.account-key", strings.TrimSpace(accountKey))
-	if err := c.saveConfig(scope, file); err != nil {
+	if err := c.updateConfig(scope, func(file *gitConfig) {
+		file.setMulti("credential.helper", []string{"", strings.TrimSpace(command)})
+		file.set("gha.account-key", strings.TrimSpace(accountKey))
+	}); err != nil {
 		return fmt.Errorf("save git config: %w", err)
 	}
 	return nil
@@ -146,12 +161,9 @@ func (c *NativeClient) SetRemoteURL(ctx context.Context, name, remoteURL string)
 	if strings.TrimSpace(remoteURL) == "" {
 		return errors.New("remote URL is required")
 	}
-	file, err := c.loadConfig(ScopeLocal)
-	if err != nil {
-		return fmt.Errorf("load git config: %w", err)
-	}
-	file.set("remote."+strings.ToLower(name)+".url", strings.TrimSpace(remoteURL))
-	if err := c.saveConfig(ScopeLocal, file); err != nil {
+	if err := c.updateConfig(ScopeLocal, func(file *gitConfig) {
+		file.set("remote."+strings.ToLower(name)+".url", strings.TrimSpace(remoteURL))
+	}); err != nil {
 		return fmt.Errorf("save git config: %w", err)
 	}
 	return nil
@@ -167,7 +179,7 @@ func (c *NativeClient) CurrentBranch(ctx context.Context) (string, error) {
 	if !found {
 		return "", errors.New("not inside a git repository")
 	}
-	data, err := os.ReadFile(filepath.Join(gitDir, "HEAD"))
+	data, err := gitReadFile(filepath.Join(gitDir, "HEAD"))
 	if err != nil {
 		return "", fmt.Errorf("read HEAD: %w", err)
 	}
@@ -180,21 +192,21 @@ func (c *NativeClient) CurrentBranch(ctx context.Context) (string, error) {
 }
 
 func (c *NativeClient) repo() (root, gitDir string, found bool, err error) {
-	start, err := filepath.Abs(c.Dir)
+	start, err := gitAbs(c.Dir)
 	if err != nil {
 		return "", "", false, fmt.Errorf("get absolute path: %w", err)
 	}
-	if info, statErr := os.Stat(start); statErr == nil && !info.IsDir() {
+	if info, statErr := gitStat(start); statErr == nil && !info.IsDir() {
 		start = filepath.Dir(start)
 	}
 	for current := start; ; current = filepath.Dir(current) {
 		marker := filepath.Join(current, ".git")
-		info, statErr := os.Stat(marker)
+		info, statErr := gitStat(marker)
 		if statErr == nil {
 			if info.IsDir() {
 				return current, marker, true, nil
 			}
-			data, readErr := os.ReadFile(marker)
+			data, readErr := gitReadFile(marker)
 			if readErr != nil {
 				return "", "", false, fmt.Errorf("read .git file: %w", readErr)
 			}
@@ -228,12 +240,16 @@ func (c *NativeClient) configPath(scope Scope) (string, error) {
 		if !found {
 			return "", errors.New("not inside a git repository")
 		}
-		return filepath.Join(gitDir, "config"), nil
+		commonDir, err := commonGitDir(gitDir)
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(commonDir, "config"), nil
 	case ScopeGlobal:
 		if path := strings.TrimSpace(os.Getenv("GIT_CONFIG_GLOBAL")); path != "" {
 			return path, nil
 		}
-		home, err := os.UserHomeDir()
+		home, err := gitUserHomeDir()
 		if err != nil {
 			return "", fmt.Errorf("get home directory: %w", err)
 		}
@@ -259,21 +275,82 @@ func (c *NativeClient) loadConfig(scope Scope) (gitConfig, error) {
 }
 
 func (c *NativeClient) saveConfig(scope Scope, file gitConfig) error {
+	return c.updateConfig(scope, func(current *gitConfig) { *current = file })
+}
+
+func (c *NativeClient) updateConfig(scope Scope, update func(*gitConfig)) error {
 	path, err := c.configPath(scope)
 	if err != nil {
 		return fmt.Errorf("get config path: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := gitMkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create config directory: %w", err)
 	}
+	lockPath := path + ".lock"
+	lock, err := gitOpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return fmt.Errorf("create git config lock %s: %w", lockPath, err)
+	}
+	defer gitRemove(lockPath)
+	perm := os.FileMode(0o644)
+	if info, statErr := gitStat(path); statErr == nil {
+		perm = info.Mode().Perm()
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		lock.Close()
+		return fmt.Errorf("stat git config %s: %w", path, statErr)
+	}
+	if err := lock.Chmod(perm); err != nil {
+		lock.Close()
+		return fmt.Errorf("set git config lock permissions: %w", err)
+	}
+	file, err := readGitConfig(path)
+	if err != nil {
+		lock.Close()
+		return fmt.Errorf("read git config from %s: %w", path, err)
+	}
+	update(&file)
 	data := strings.Join(file.lines, "\n")
 	if !strings.HasSuffix(data, "\n") {
 		data += "\n"
 	}
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
-		return fmt.Errorf("write git config to %s: %w", path, err)
+	written, err := lock.WriteString(data)
+	if err != nil {
+		lock.Close()
+		return fmt.Errorf("write git config lock: %w", err)
+	}
+	if written != len(data) {
+		lock.Close()
+		return fmt.Errorf("write git config lock: %w", io.ErrShortWrite)
+	}
+	if err := lock.Sync(); err != nil {
+		lock.Close()
+		return fmt.Errorf("sync git config lock: %w", err)
+	}
+	if err := lock.Close(); err != nil {
+		return fmt.Errorf("close git config lock: %w", err)
+	}
+	if err := gitRename(lockPath, path); err != nil {
+		return fmt.Errorf("replace git config %s: %w", path, err)
 	}
 	return nil
+}
+
+func commonGitDir(gitDir string) (string, error) {
+	data, err := gitReadFile(filepath.Join(gitDir, "commondir"))
+	if errors.Is(err, os.ErrNotExist) {
+		return gitDir, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read git commondir: %w", err)
+	}
+	common := strings.TrimSpace(string(data))
+	if common == "" {
+		return "", errors.New("git commondir is empty")
+	}
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(gitDir, common)
+	}
+	return filepath.Clean(common), nil
 }
 
 type gitConfig struct {
@@ -286,7 +363,7 @@ var (
 )
 
 func readGitConfig(path string) (gitConfig, error) {
-	data, err := os.ReadFile(path)
+	data, err := gitReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return gitConfig{lines: []string{}}, nil
 	}

@@ -14,6 +14,20 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+var (
+	editFile        = openInEditor
+	findEditor      = exec.LookPath
+	editMkdirTemp   = os.MkdirTemp
+	editRemoveAll   = os.RemoveAll
+	editMarshal     = yaml.Marshal
+	editWriteFile   = os.WriteFile
+	editReadFile    = os.ReadFile
+	editUnmarshal   = yaml.Unmarshal
+	editSaveAccount = func(store *config.Store, alias string, account config.Account) error {
+		return store.UpsertAccount(alias, account)
+	}
+)
+
 func newEditCmd() *cobra.Command {
 	var editAll bool
 
@@ -34,7 +48,7 @@ func newEditCmd() *cobra.Command {
 
 			if editAll || len(args) == 0 {
 				path := utils.AccountsPath(deps.Store.Dir)
-				if err := openInEditor(editor, path); err != nil {
+				if err := editFile(editor, path); err != nil {
 					return err
 				}
 				if _, err := deps.Store.LoadAccounts(); err != nil {
@@ -50,31 +64,31 @@ func newEditCmd() *cobra.Command {
 				return err
 			}
 
-			tmpDir, err := os.MkdirTemp("", "gha-edit-*")
+			tmpDir, err := editMkdirTemp("", "gha-edit-*")
 			if err != nil {
 				return err
 			}
-			defer os.RemoveAll(tmpDir)
+			defer editRemoveAll(tmpDir)
 
 			tmpFile := filepath.Join(tmpDir, alias+".yaml")
-			data, err := yaml.Marshal(account)
+			data, err := editMarshal(account)
 			if err != nil {
 				return err
 			}
-			if err := os.WriteFile(tmpFile, data, 0o644); err != nil {
+			if err := editWriteFile(tmpFile, data, 0o644); err != nil {
 				return err
 			}
 
-			if err := openInEditor(editor, tmpFile); err != nil {
+			if err := editFile(editor, tmpFile); err != nil {
 				return err
 			}
 
-			edited, err := os.ReadFile(tmpFile)
+			edited, err := editReadFile(tmpFile)
 			if err != nil {
 				return err
 			}
 			var next config.Account
-			if err := yaml.Unmarshal(edited, &next); err != nil {
+			if err := editUnmarshal(edited, &next); err != nil {
 				return fmt.Errorf("invalid account yaml: %w", err)
 			}
 			if strings.TrimSpace(next.Login) == "" || strings.TrimSpace(next.GitName) == "" || strings.TrimSpace(next.Email) == "" {
@@ -84,7 +98,7 @@ func newEditCmd() *cobra.Command {
 				next.Protocol = "https"
 			}
 
-			if err := deps.Store.UpsertAccount(alias, next); err != nil {
+			if err := editSaveAccount(deps.Store, alias, next); err != nil {
 				return err
 			}
 			terminal.Success(deps.Stdout, "Updated account %s", terminal.Bold(alias))
@@ -104,7 +118,7 @@ func resolveEditor() string {
 		}
 	}
 	for _, candidate := range []string{"nvim", "vim", "vi", "nano", "code", "notepad"} {
-		if path, err := exec.LookPath(candidate); err == nil {
+		if path, err := findEditor(candidate); err == nil {
 			return path
 		}
 	}

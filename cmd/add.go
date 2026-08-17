@@ -114,7 +114,7 @@ func newAddCmd() *cobra.Command {
 	cmd.Flags().StringVar(&hostname, "hostname", "github.com", "GitHub hostname")
 	cmd.Flags().StringVar(&gitName, "git-name", "", "git user.name")
 	cmd.Flags().StringVar(&email, "email", "", "git user.email")
-	cmd.Flags().StringVar(&protocol, "protocol", "https", "git protocol (https|ssh)")
+	cmd.Flags().StringVar(&protocol, "protocol", "", "git protocol (https|ssh)")
 	cmd.Flags().BoolVar(&manual, "manual", false, "skip browser login and prompt manually")
 	return cmd
 }

@@ -20,6 +20,13 @@ targets=(
   "windows amd64"
 )
 
+resource_file="cmd/gha/resource.syso"
+rm -f "${resource_file}"
+cleanup() {
+  rm -f "${resource_file}"
+}
+trap cleanup EXIT
+
 for target in "${targets[@]}"; do
   read -r goos goarch <<< "${target}"
   suffix=""
@@ -59,8 +66,8 @@ for target in "${targets[@]}"; do
     -o "${binary}" ./cmd/gha
 
   # 清理临时文件
-  if [[ "${goos}" == "windows" ]] && [[ -f cmd/gha/resource.syso ]]; then
-    rm -f cmd/gha/resource.syso
+  if [[ "${goos}" == "windows" ]]; then
+    rm -f "${resource_file}"
   fi
 
   if [[ "${archive_ext}" == "zip" ]]; then

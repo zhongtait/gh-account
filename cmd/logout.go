@@ -45,8 +45,6 @@ func newLogoutCmd() *cobra.Command {
 
 			if alias != "" {
 				terminal.Success(deps.Stdout, "Removed local OAuth credential for %s (%s)", alias, loginName)
-			} else if loginName != "" {
-				terminal.Success(deps.Stdout, "Removed local OAuth credential for %s", loginName)
 			} else {
 				terminal.Success(deps.Stdout, "Removed local active OAuth credential")
 			}

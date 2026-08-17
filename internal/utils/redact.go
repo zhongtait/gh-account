@@ -7,11 +7,11 @@ import (
 var (
 	// GitHub token patterns
 	tokenPatterns = []*regexp.Regexp{
-		regexp.MustCompile(`ghp_[a-zA-Z0-9]{36}`),           // Personal access token
-		regexp.MustCompile(`gho_[a-zA-Z0-9]{36}`),           // OAuth token
-		regexp.MustCompile(`ghu_[a-zA-Z0-9]{36}`),           // User token
-		regexp.MustCompile(`ghs_[a-zA-Z0-9]{36}`),           // Server token
-		regexp.MustCompile(`ghr_[a-zA-Z0-9]{36}`),           // Refresh token
+		regexp.MustCompile(`ghp_[a-zA-Z0-9]{36}`),                        // Personal access token
+		regexp.MustCompile(`gho_[a-zA-Z0-9]{36}`),                        // OAuth token
+		regexp.MustCompile(`ghu_[a-zA-Z0-9]{36}`),                        // User token
+		regexp.MustCompile(`ghs_[a-zA-Z0-9]{36}`),                        // Server token
+		regexp.MustCompile(`ghr_[a-zA-Z0-9]{36}`),                        // Refresh token
 		regexp.MustCompile(`github_pat_[a-zA-Z0-9]{22}_[a-zA-Z0-9]{59}`), // Fine-grained PAT
 	}
 )

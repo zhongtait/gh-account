@@ -1,5 +1,10 @@
 # gh-account
 
+[![Unit tests](https://github.com/zhongtait/gh-account/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/zhongtait/gh-account/actions/workflows/ci.yml)
+[![Package artifacts](https://github.com/zhongtait/gh-account/actions/workflows/package.yml/badge.svg?branch=master)](https://github.com/zhongtait/gh-account/actions/workflows/package.yml)
+[![Release](https://github.com/zhongtait/gh-account/actions/workflows/release.yml/badge.svg)](https://github.com/zhongtait/gh-account/actions/workflows/release.yml)
+[![Latest release](https://img.shields.io/github/v/release/zhongtait/gh-account?sort=semver)](https://github.com/zhongtait/gh-account/releases/latest)
+
 `gha` 是一个使用纯 Go GitHub OAuth 和 Git 配置操作的多账号管理工具。它把 GitHub OAuth 登录状态、Git 提交身份和仓库 remote 设置集中到一个可复用的命令行流程中。
 
 ## 功能
@@ -124,6 +129,34 @@ gha doctor
 ```
 
 账号登录状态也可以通过 `gha login personal` 管理；编辑和退出账号分别使用 `gha edit personal` 与 `gha logout personal`。
+
+## 开发与测试
+
+本地开发需要 Go 1.26.1 或更高版本。常用检查命令：
+
+```bash
+go test ./... -cover      # 单元测试与覆盖率（当前为 100%）
+go test -race ./...       # 竞态检测
+go vet ./...              # 静态检查
+test -z "$(gofmt -l .)"  # 格式检查
+make build                # 构建 gha
+```
+
+GitHub Actions 的 [CI workflow](.github/workflows/ci.yml) 会在 Pull Request 以及 `main`/`master` 推送时执行格式检查、`go vet`、单元测试，强制保持 100% statement coverage，并在 Ubuntu、macOS 和 Windows 上构建。
+
+## 版本与发布
+
+- 推送到 `main`/`master` 会生成临时 Package Artifact，不会自动创建 GitHub Release；Artifact 默认保留 14 天。
+- 推送符合 `vX.Y.Z` 格式的 tag 会构建正式 Release。例如：
+
+  ```bash
+  git tag v1.2.3
+  git push origin v1.2.3
+  ```
+
+- 也可以从 [Release workflow](.github/workflows/release.yml) 手动运行，填写版本号（例如 `v1.2.3`）；workflow 会在当前 commit 上创建 Release。
+- 正式 Release 的版本号来自 tag 或手动输入；分支推送生成的临时包使用当前 commit SHA 的前 7 位。
+- 每个正式 Release 都包含各平台压缩包和 `SHA256SUMS`，发布前会执行单元测试和 `go vet`。
 
 ## 配置
 

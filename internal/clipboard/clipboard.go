@@ -2,33 +2,46 @@ package clipboard
 
 import (
 	"fmt"
+	"io"
 	"os/exec"
 	"runtime"
+)
+
+type clipboardCommand interface {
+	StdinPipe() (io.WriteCloser, error)
+	Start() error
+	Wait() error
+}
+
+var (
+	clipboardGOOS     = runtime.GOOS
+	clipboardLookPath = exec.LookPath
+	newCommand        = func(name string, args ...string) clipboardCommand { return exec.Command(name, args...) }
 )
 
 // Copy copies the given text to the system clipboard.
 // It returns an error if the clipboard operation fails.
 func Copy(text string) error {
-	var cmd *exec.Cmd
+	var cmd clipboardCommand
 
-	switch runtime.GOOS {
+	switch clipboardGOOS {
 	case "darwin":
-		cmd = exec.Command("pbcopy")
+		cmd = newCommand("pbcopy")
 	case "linux":
 		// Try xclip first, then xsel, then wl-copy (Wayland)
-		if _, err := exec.LookPath("xclip"); err == nil {
-			cmd = exec.Command("xclip", "-selection", "clipboard")
-		} else if _, err := exec.LookPath("xsel"); err == nil {
-			cmd = exec.Command("xsel", "--clipboard", "--input")
-		} else if _, err := exec.LookPath("wl-copy"); err == nil {
-			cmd = exec.Command("wl-copy")
+		if _, err := clipboardLookPath("xclip"); err == nil {
+			cmd = newCommand("xclip", "-selection", "clipboard")
+		} else if _, err := clipboardLookPath("xsel"); err == nil {
+			cmd = newCommand("xsel", "--clipboard", "--input")
+		} else if _, err := clipboardLookPath("wl-copy"); err == nil {
+			cmd = newCommand("wl-copy")
 		} else {
 			return fmt.Errorf("no clipboard utility found (install xclip, xsel, or wl-clipboard)")
 		}
 	case "windows":
-		cmd = exec.Command("clip")
+		cmd = newCommand("clip")
 	default:
-		return fmt.Errorf("clipboard not supported on %s", runtime.GOOS)
+		return fmt.Errorf("clipboard not supported on %s", clipboardGOOS)
 	}
 
 	stdin, err := cmd.StdinPipe()

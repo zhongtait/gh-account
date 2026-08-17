@@ -2,7 +2,7 @@
 
 [![Unit tests](https://github.com/zhongtait/gh-account/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/zhongtait/gh-account/actions/workflows/ci.yml)
 [![Package artifacts](https://github.com/zhongtait/gh-account/actions/workflows/package.yml/badge.svg?branch=master)](https://github.com/zhongtait/gh-account/actions/workflows/package.yml)
-[![Release](https://github.com/zhongtait/gh-account/actions/workflows/release.yml/badge.svg)](https://github.com/zhongtait/gh-account/actions/workflows/release.yml)
+[![Release](https://github.com/zhongtait/gh-account/actions/workflows/release.yml/badge.svg?event=push)](https://github.com/zhongtait/gh-account/actions/workflows/release.yml)
 [![Latest release](https://img.shields.io/github/v/release/zhongtait/gh-account?sort=semver)](https://github.com/zhongtait/gh-account/releases/latest)
 
 `gha` 是一个使用纯 Go GitHub OAuth 和 Git 配置操作的多账号管理工具。它把 GitHub OAuth 登录状态、Git 提交身份和仓库 remote 设置集中到一个可复用的命令行流程中。

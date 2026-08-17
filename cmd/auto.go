@@ -66,7 +66,7 @@ func newAutoCmd() *cobra.Command {
 					return err
 				}
 				if choice == "1" {
-					accountAlias, err = runLoginForAuto(cmd, info)
+					accountAlias, err = runLoginForAuto(cmd, info, reader)
 					if err != nil {
 						return err
 					}
@@ -112,19 +112,18 @@ func promptAutoChoice(reader *bufio.Reader) (string, error) {
 	return choice, nil
 }
 
-func runLoginForAuto(cmd *cobra.Command, info remote.Info) (string, error) {
+func runLoginForAuto(cmd *cobra.Command, info remote.Info, reader *bufio.Reader) (string, error) {
+	previousStdin := deps.Stdin
+	deps.Stdin = reader
+	defer func() { deps.Stdin = previousStdin }()
 	loginCmd := newLoginCmd()
 	loginCmd.SetContext(commandContext(cmd))
-	loginCmd.SetIn(deps.Stdin)
+	loginCmd.SetIn(reader)
 	loginCmd.SetOut(deps.Stdout)
 	loginCmd.SetErr(deps.Stderr)
-	if err := loginCmd.Flags().Set("hostname", info.Host); err != nil {
-		return "", err
-	}
+	_ = loginCmd.Flags().Set("hostname", info.Host)
 	if info.Protocol != "" {
-		if err := loginCmd.Flags().Set("protocol", info.Protocol); err != nil {
-			return "", err
-		}
+		_ = loginCmd.Flags().Set("protocol", info.Protocol)
 	}
 	if err := loginCmd.RunE(loginCmd, nil); err != nil {
 		return "", err

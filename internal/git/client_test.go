@@ -73,6 +73,37 @@ func TestNativeClientGlobalIdentity(t *testing.T) {
 	}
 }
 
+func TestNativeClientReadsConfigAfterAcquiringLock(t *testing.T) {
+	root := t.TempDir()
+	gitDir := filepath.Join(root, ".git")
+	if err := os.MkdirAll(gitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(gitDir, "config")
+	if err := os.WriteFile(configPath, []byte("[core]\n\trepositoryformatversion = 0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	originalOpen := gitOpenFile
+	t.Cleanup(func() { gitOpenFile = originalOpen })
+	gitOpenFile = func(name string, flag int, perm os.FileMode) (gitLockFile, error) {
+		lock, err := originalOpen(name, flag, perm)
+		if err == nil {
+			err = os.WriteFile(configPath, []byte("[remote \"origin\"]\n\turl = https://github.com/acme/repo.git\n"), 0o644)
+		}
+		return lock, err
+	}
+
+	client := NewNativeClient(root)
+	if err := client.SetIdentity(context.Background(), ScopeLocal, Identity{Name: "Alice", Email: "alice@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	remoteURL, err := client.GetRemoteURL(context.Background(), "origin")
+	if err != nil || remoteURL != "https://github.com/acme/repo.git" {
+		t.Fatalf("remote URL = %q, err = %v", remoteURL, err)
+	}
+}
+
 func TestNativeClientCredentialHelperReplacesExistingHelpers(t *testing.T) {
 	root := t.TempDir()
 	gitDir := filepath.Join(root, ".git")
@@ -103,6 +134,47 @@ func TestNativeClientCredentialHelperReplacesExistingHelpers(t *testing.T) {
 	}
 	if !strings.Contains(got, "account-key = github.com|personal-user") {
 		t.Fatalf("credential account key was not saved:\n%s", got)
+	}
+}
+
+func TestNativeClientWorktreeUsesCommonConfig(t *testing.T) {
+	root := t.TempDir()
+	commonGit := filepath.Join(root, ".git")
+	worktreeGit := filepath.Join(commonGit, "worktrees", "feature")
+	if err := os.MkdirAll(worktreeGit, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	worktree := filepath.Join(root, "feature")
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktree, ".git"), []byte("gitdir: "+worktreeGit+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktreeGit, "commondir"), []byte("../..\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktreeGit, "HEAD"), []byte("ref: refs/heads/feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	commonConfig := filepath.Join(commonGit, "config")
+	if err := os.WriteFile(commonConfig, []byte("[core]\n\trepositoryformatversion = 0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	client := NewNativeClient(worktree)
+	if err := client.SetIdentity(context.Background(), ScopeLocal, Identity{Name: "Feature", Email: "feature@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	identity, err := client.GetIdentity(context.Background(), ScopeLocal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.Name != "Feature" || identity.Email != "feature@example.com" {
+		t.Fatalf("identity = %+v", identity)
+	}
+	if _, err := os.Stat(filepath.Join(worktreeGit, "config")); !os.IsNotExist(err) {
+		t.Fatalf("worktree config was unexpectedly created, err=%v", err)
 	}
 }
 

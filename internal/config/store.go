@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/gofrs/flock"
 	"github.com/zhongtait/gh-account/internal/utils"
 	"gopkg.in/yaml.v3"
 )
@@ -24,6 +25,28 @@ type Store struct {
 	mu  sync.RWMutex
 }
 
+type storeLocker interface {
+	Lock() error
+	Unlock() error
+}
+
+var (
+	storeConfigDir       = utils.ConfigDir
+	storeMkdirAll        = os.MkdirAll
+	storeStat            = os.Stat
+	storeReadFile        = os.ReadFile
+	storeWriteFile       = os.WriteFile
+	storeChmod           = os.Chmod
+	storeRandReader      = rand.Reader
+	storeAtomicWriteFile = utils.AtomicWriteFile
+	storeAbs             = filepath.Abs
+	storeExpandHome      = utils.ExpandHome
+	storeYAMLMarshal     = yaml.Marshal
+	storeNewCipher       = aes.NewCipher
+	storeNewGCM          = cipher.NewGCM
+	newStoreLock         = func(path string) storeLocker { return flock.New(path) }
+)
+
 // NewStore creates a store rooted at the given config directory.
 func NewStore(dir string) *Store {
 	return &Store{Dir: dir}
@@ -31,7 +54,7 @@ func NewStore(dir string) *Store {
 
 // DefaultStore creates a store using the default config location.
 func DefaultStore() (*Store, error) {
-	dir, err := utils.ConfigDir()
+	dir, err := storeConfigDir()
 	if err != nil {
 		return nil, err
 	}
@@ -40,38 +63,40 @@ func DefaultStore() (*Store, error) {
 
 // EnsureInitialized creates the config directory and default files if needed.
 func (s *Store) EnsureInitialized() error {
-	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
-		return err
-	}
-
-	accountsPath := utils.AccountsPath(s.Dir)
-	if _, err := os.Stat(accountsPath); errors.Is(err, os.ErrNotExist) {
-		if err := s.SaveAccounts(DefaultAccounts()); err != nil {
+	return s.withWriteLock(func() error {
+		if err := storeMkdirAll(s.Dir, 0o700); err != nil {
 			return err
 		}
-	} else if err != nil {
-		return err
-	}
-
-	configPath := utils.ConfigPath(s.Dir)
-	if _, err := os.Stat(configPath); errors.Is(err, os.ErrNotExist) {
-		if err := s.SaveConfig(DefaultConfig()); err != nil {
+		accountsPath := utils.AccountsPath(s.Dir)
+		if _, err := storeStat(accountsPath); errors.Is(err, os.ErrNotExist) {
+			if err := s.saveAccounts(DefaultAccounts()); err != nil {
+				return err
+			}
+		} else if err != nil {
 			return err
 		}
-	} else if err != nil {
-		return err
-	}
-
-	return nil
+		configPath := utils.ConfigPath(s.Dir)
+		if _, err := storeStat(configPath); errors.Is(err, os.ErrNotExist) {
+			if err := s.saveConfig(DefaultConfig()); err != nil {
+				return err
+			}
+		} else if err != nil {
+			return err
+		}
+		return nil
+	})
 }
 
 // LoadAccounts reads accounts.yaml.
 func (s *Store) LoadAccounts() (AccountsFile, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.loadAccounts()
+}
 
+func (s *Store) loadAccounts() (AccountsFile, error) {
 	path := utils.AccountsPath(s.Dir)
-	data, err := os.ReadFile(path)
+	data, err := storeReadFile(path)
 	if err != nil {
 		return AccountsFile{}, err
 	}
@@ -87,17 +112,24 @@ func (s *Store) LoadAccounts() (AccountsFile, error) {
 		account.Hostname = normalizeHostname(account.Hostname)
 		file.Accounts[alias] = account
 	}
+	if err := validateAccounts(file); err != nil {
+		return AccountsFile{}, fmt.Errorf("validate accounts.yaml: %w", err)
+	}
 	return file, nil
 }
 
 // SaveAccounts writes accounts.yaml.
 func (s *Store) SaveAccounts(file AccountsFile) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if file.Accounts == nil {
 		file.Accounts = map[string]Account{}
 	}
+	if err := validateAccounts(file); err != nil {
+		return err
+	}
+	return s.withWriteLock(func() error { return s.saveAccounts(file) })
+}
+
+func (s *Store) saveAccounts(file AccountsFile) error {
 	return writeYAML(utils.AccountsPath(s.Dir), file)
 }
 
@@ -105,9 +137,12 @@ func (s *Store) SaveAccounts(file AccountsFile) error {
 func (s *Store) LoadConfig() (ConfigFile, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.loadConfig()
+}
 
+func (s *Store) loadConfig() (ConfigFile, error) {
 	path := utils.ConfigPath(s.Dir)
-	data, err := os.ReadFile(path)
+	data, err := storeReadFile(path)
 	if err != nil {
 		return ConfigFile{}, err
 	}
@@ -126,13 +161,32 @@ func (s *Store) LoadConfig() (ConfigFile, error) {
 
 // SaveConfig writes config.yaml.
 func (s *Store) SaveConfig(file ConfigFile) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if file.DefaultScope == "" {
 		file.DefaultScope = "local"
 	}
+	return s.withWriteLock(func() error { return s.saveConfig(file) })
+}
+
+func (s *Store) saveConfig(file ConfigFile) error {
 	return writeYAML(utils.ConfigPath(s.Dir), file)
+}
+
+// UpdateConfig performs a load-modify-save operation while holding the store's
+// in-process and cross-process write locks.
+func (s *Store) UpdateConfig(update func(*ConfigFile) error) error {
+	return s.withWriteLock(func() error {
+		file, err := s.loadConfig()
+		if err != nil {
+			return err
+		}
+		if err := update(&file); err != nil {
+			return err
+		}
+		if file.DefaultScope == "" {
+			file.DefaultScope = "local"
+		}
+		return s.saveConfig(file)
+	})
 }
 
 // LoadAuth reads the local OAuth credential store. Missing auth.yaml is
@@ -140,9 +194,12 @@ func (s *Store) SaveConfig(file ConfigFile) error {
 func (s *Store) LoadAuth() (AuthFile, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.loadAuth()
+}
 
+func (s *Store) loadAuth() (AuthFile, error) {
 	path := utils.AuthPath(s.Dir)
-	data, err := os.ReadFile(path)
+	data, err := storeReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return DefaultAuth(), nil
 	}
@@ -191,8 +248,25 @@ func (s *Store) GetCredential(hostname, login string) (Credential, bool, error) 
 
 // SaveAuth writes OAuth credentials with owner-only permissions.
 func (s *Store) SaveAuth(file AuthFile) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	return s.withWriteLock(func() error { return s.saveAuth(file) })
+}
+
+// UpdateAuth performs a load-modify-save operation while holding the store's
+// in-process and cross-process write locks.
+func (s *Store) UpdateAuth(update func(*AuthFile) error) error {
+	return s.withWriteLock(func() error {
+		file, err := s.loadAuth()
+		if err != nil {
+			return err
+		}
+		if err := update(&file); err != nil {
+			return err
+		}
+		return s.saveAuth(file)
+	})
+}
+
+func (s *Store) saveAuth(file AuthFile) error {
 
 	if file.Credentials == nil {
 		file.Credentials = map[string]Credential{}
@@ -209,49 +283,28 @@ func (s *Store) SaveAuth(file AuthFile) error {
 		}
 		toSave.Credentials[key] = credential
 	}
-	data, err := yaml.Marshal(toSave)
+	data, err := storeYAMLMarshal(toSave)
 	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
 		return err
 	}
 	path := utils.AuthPath(s.Dir)
-	temporary, err := os.CreateTemp(s.Dir, ".auth.yaml-*")
-	if err != nil {
-		return err
+	// AtomicWriteFile preserves an existing file's mode. Tighten legacy or
+	// manually altered auth files before replacement so the new file is never
+	// created with permissions broader than owner-only.
+	if err := storeChmod(path, 0o600); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("set auth file permissions: %w", err)
 	}
-	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
-	if err := temporary.Chmod(0o600); err != nil {
-		temporary.Close()
-		return err
-	}
-	if _, err := temporary.Write(data); err != nil {
-		temporary.Close()
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		temporary.Close()
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(temporaryPath, path); err != nil {
-		return err
-	}
-	return os.Chmod(path, 0o600)
+	return storeAtomicWriteFile(path, data, 0o600)
 }
 
 func (s *Store) authKey(create bool) ([]byte, error) {
 	path := utils.AuthKeyPath(s.Dir)
-	data, err := os.ReadFile(path)
+	data, err := storeReadFile(path)
 	if err == nil {
 		if len(data) != 32 {
 			return nil, errors.New("auth.key must contain 32 bytes")
 		}
-		if chmodErr := os.Chmod(path, 0o600); chmodErr != nil {
+		if chmodErr := storeChmod(path, 0o600); chmodErr != nil {
 			return nil, fmt.Errorf("set auth key permissions: %w", chmodErr)
 		}
 		return data, nil
@@ -260,16 +313,16 @@ func (s *Store) authKey(create bool) ([]byte, error) {
 		return nil, fmt.Errorf("read auth key: %w", err)
 	}
 	data = make([]byte, 32)
-	if _, err := io.ReadFull(rand.Reader, data); err != nil {
+	if _, err := io.ReadFull(storeRandReader, data); err != nil {
 		return nil, fmt.Errorf("generate auth key: %w", err)
 	}
-	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
+	if err := storeMkdirAll(s.Dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create config directory: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if err := storeWriteFile(path, data, 0o600); err != nil {
 		return nil, fmt.Errorf("write auth key: %w", err)
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
+	if err := storeChmod(path, 0o600); err != nil {
 		return nil, fmt.Errorf("set auth key permissions: %w", err)
 	}
 	return data, nil
@@ -280,16 +333,16 @@ func (s *Store) encryptToken(aad, token string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("get auth key: %w", err)
 	}
-	block, err := aes.NewCipher(key)
+	block, err := storeNewCipher(key)
 	if err != nil {
 		return "", fmt.Errorf("create cipher: %w", err)
 	}
-	gcm, err := cipher.NewGCM(block)
+	gcm, err := storeNewGCM(block)
 	if err != nil {
 		return "", fmt.Errorf("create GCM: %w", err)
 	}
 	nonce := make([]byte, gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+	if _, err := io.ReadFull(storeRandReader, nonce); err != nil {
 		return "", fmt.Errorf("generate nonce: %w", err)
 	}
 	ciphertext := gcm.Seal(nonce, nonce, []byte(token), []byte(aad))
@@ -308,11 +361,11 @@ func (s *Store) decryptToken(aad, encoded string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("decode token: %w", err)
 	}
-	block, err := aes.NewCipher(key)
+	block, err := storeNewCipher(key)
 	if err != nil {
 		return "", fmt.Errorf("create cipher: %w", err)
 	}
-	gcm, err := cipher.NewGCM(block)
+	gcm, err := storeNewGCM(block)
 	if err != nil {
 		return "", fmt.Errorf("create GCM: %w", err)
 	}
@@ -345,41 +398,42 @@ func (s *Store) UpsertAccount(alias string, account Account) error {
 	if alias == "" {
 		return errors.New("alias is required")
 	}
-	if strings.TrimSpace(account.Login) == "" {
-		return errors.New("login is required")
-	}
-	if strings.TrimSpace(account.GitName) == "" {
-		return errors.New("git_name is required")
-	}
-	if strings.TrimSpace(account.Email) == "" {
-		return errors.New("email is required")
-	}
 	account.Protocol = normalizeProtocol(account.Protocol)
 	account.Hostname = normalizeHostname(account.Hostname)
-
-	file, err := s.LoadAccounts()
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			file = DefaultAccounts()
-		} else {
-			return err
-		}
+	account.Login = strings.TrimSpace(account.Login)
+	account.GitName = strings.TrimSpace(account.GitName)
+	account.Email = strings.TrimSpace(account.Email)
+	if err := account.Validate(); err != nil {
+		return err
 	}
-	file.Accounts[alias] = account
-	return s.SaveAccounts(file)
+
+	return s.withWriteLock(func() error {
+		file, err := s.loadAccounts()
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				file = DefaultAccounts()
+			} else {
+				return err
+			}
+		}
+		file.Accounts[alias] = account
+		return s.saveAccounts(file)
+	})
 }
 
 // RemoveAccount deletes an account alias.
 func (s *Store) RemoveAccount(alias string) error {
-	file, err := s.LoadAccounts()
-	if err != nil {
-		return err
-	}
-	if _, ok := file.Accounts[alias]; !ok {
-		return fmt.Errorf("account %q not found", alias)
-	}
-	delete(file.Accounts, alias)
-	return s.SaveAccounts(file)
+	return s.withWriteLock(func() error {
+		file, err := s.loadAccounts()
+		if err != nil {
+			return err
+		}
+		if _, ok := file.Accounts[alias]; !ok {
+			return fmt.Errorf("account %q not found", alias)
+		}
+		delete(file.Accounts, alias)
+		return s.saveAccounts(file)
+	})
 }
 
 // ListAliases returns sorted account aliases.
@@ -403,7 +457,7 @@ func (s *Store) MatchDirectory(path string) (string, string, bool, error) {
 		return "", "", false, err
 	}
 
-	absPath, err := filepath.Abs(path)
+	absPath, err := storeAbs(path)
 	if err != nil {
 		return "", "", false, err
 	}
@@ -415,11 +469,11 @@ func (s *Store) MatchDirectory(path string) (string, string, bool, error) {
 	)
 
 	for rawDir, binding := range cfg.Directories {
-		expanded, err := utils.ExpandHome(rawDir)
+		expanded, err := storeExpandHome(rawDir)
 		if err != nil {
 			return "", "", false, err
 		}
-		absDir, err := filepath.Abs(expanded)
+		absDir, err := storeAbs(expanded)
 		if err != nil {
 			return "", "", false, err
 		}
@@ -436,14 +490,41 @@ func (s *Store) MatchDirectory(path string) (string, string, bool, error) {
 }
 
 func writeYAML(path string, value any) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	data, err := yaml.Marshal(value)
+	data, err := storeYAMLMarshal(value)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	return storeAtomicWriteFile(path, data, 0o644)
+}
+
+func (s *Store) withWriteLock(fn func() error) (err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := storeMkdirAll(s.Dir, 0o700); err != nil {
+		return err
+	}
+	fileLock := newStoreLock(filepath.Join(s.Dir, ".gha.lock"))
+	if err := fileLock.Lock(); err != nil {
+		return fmt.Errorf("lock config store: %w", err)
+	}
+	defer func() {
+		if unlockErr := fileLock.Unlock(); err == nil && unlockErr != nil {
+			err = fmt.Errorf("unlock config store: %w", unlockErr)
+		}
+	}()
+	return fn()
+}
+
+func validateAccounts(file AccountsFile) error {
+	for alias, account := range file.Accounts {
+		if strings.TrimSpace(alias) == "" {
+			return errors.New("account alias is required")
+		}
+		if err := account.Validate(); err != nil {
+			return fmt.Errorf("account %q: %w", alias, err)
+		}
+	}
+	return nil
 }
 
 func normalizeProtocol(protocol string) string {
@@ -460,8 +541,12 @@ func normalizeProtocol(protocol string) string {
 
 func normalizeHostname(hostname string) string {
 	hostname = strings.TrimSpace(hostname)
-	hostname = strings.TrimPrefix(hostname, "https://")
-	hostname = strings.TrimPrefix(hostname, "http://")
+	lower := strings.ToLower(hostname)
+	if strings.HasPrefix(lower, "https://") {
+		hostname = hostname[len("https://"):]
+	} else if strings.HasPrefix(lower, "http://") {
+		hostname = hostname[len("http://"):]
+	}
 	hostname = strings.TrimSuffix(hostname, "/")
 	if hostname == "" {
 		return "github.com"

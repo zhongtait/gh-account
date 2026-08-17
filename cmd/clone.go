@@ -22,6 +22,20 @@ import (
 // native Git client, which intentionally does not shell out to git.
 var cloneGit = runGitClone
 
+var (
+	cloneSelectAccount  = selectCloneAccount
+	cloneRun            = cloneWithAccount
+	cloneDestinationFor = cloneDestination
+	cloneLogin          = runLoginForClone
+	cloneAccountByAlias = func(store *config.Store, alias string) (config.Account, error) { return store.GetAccount(alias) }
+	cloneLocalGit       = func(destination string) cloneConfigurator { return git.NewNativeClient(destination) }
+)
+
+type cloneConfigurator interface {
+	SetIdentity(context.Context, git.Scope, git.Identity) error
+	SetCredentialHelper(context.Context, git.Scope, string, string) error
+}
+
 func newCloneCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "clone <repository> [auto|use <account>]",
@@ -60,34 +74,34 @@ func newCloneCmd() *cobra.Command {
 			if explicit {
 				alias = strings.TrimSpace(args[2])
 			}
-			alias, account, err := selectCloneAccount(ctx, cmd, info, alias, explicit)
+			alias, account, err := cloneSelectAccount(ctx, cmd, info, alias, explicit)
 			if err != nil {
 				return err
 			}
 
-			cloneErr := cloneWithAccount(ctx, args[0], info, account)
+			cloneErr := cloneRun(ctx, args[0], info, account)
 			if cloneErr != nil && !explicit && isHTTPRemote(info) && isCloneAuthFailure(cloneErr) {
 				terminal.Warn(deps.Stdout, "Account %s cannot access this repository; starting GitHub login", alias)
-				loginAlias, loginErr := runLoginForClone(cmd, info)
+				loginAlias, loginErr := cloneLogin(cmd, info)
 				if loginErr != nil {
 					return fmt.Errorf("%w; automatic login failed: %v", cloneErr, loginErr)
 				}
-				account, err = deps.Store.GetAccount(loginAlias)
+				account, err = cloneAccountByAlias(deps.Store, loginAlias)
 				if err != nil {
 					return err
 				}
 				alias = loginAlias
-				cloneErr = cloneWithAccount(ctx, args[0], info, account)
+				cloneErr = cloneRun(ctx, args[0], info, account)
 			}
 			if cloneErr != nil {
 				return cloneErr
 			}
 
-			destination, err := cloneDestination(args[0], info)
+			destination, err := cloneDestinationFor(args[0], info)
 			if err != nil {
 				return err
 			}
-			localGit := git.NewNativeClient(destination)
+			localGit := cloneLocalGit(destination)
 			if err := localGit.SetIdentity(ctx, git.ScopeLocal, git.Identity{Name: account.GitName, Email: account.Email}); err != nil {
 				return fmt.Errorf("configure cloned repository identity: %w", err)
 			}
@@ -180,7 +194,7 @@ func selectCloneAccount(ctx context.Context, cmd *cobra.Command, info remote.Inf
 
 	// No usable local credential: use the existing login flow and retry account
 	// selection. This is the auto equivalent of running gha login.
-	loginAlias, loginErr := runLoginForClone(cmd, info)
+	loginAlias, loginErr := cloneLogin(cmd, info)
 	if loginErr != nil {
 		return "", config.Account{}, loginErr
 	}
@@ -202,12 +216,8 @@ func runLoginForClone(cmd *cobra.Command, info remote.Info) (string, error) {
 	loginCmd.SetIn(deps.Stdin)
 	loginCmd.SetOut(deps.Stdout)
 	loginCmd.SetErr(deps.Stderr)
-	if err := loginCmd.Flags().Set("hostname", info.Host); err != nil {
-		return "", err
-	}
-	if err := loginCmd.Flags().Set("protocol", info.Protocol); err != nil {
-		return "", err
-	}
+	_ = loginCmd.Flags().Set("hostname", info.Host)
+	_ = loginCmd.Flags().Set("protocol", info.Protocol)
 	if err := loginCmd.RunE(loginCmd, nil); err != nil {
 		return "", fmt.Errorf("automatic GitHub login failed: %w", err)
 	}

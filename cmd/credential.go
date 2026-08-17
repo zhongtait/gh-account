@@ -12,6 +12,11 @@ import (
 	"github.com/zhongtait/gh-account/internal/config"
 )
 
+var (
+	credentialExecutable = os.Executable
+	credentialAbs        = filepath.Abs
+)
+
 // newCredentialHelperCmd implements Git's credential helper protocol. Git
 // appends the operation (get, store, or erase) to the configured command.
 func newCredentialHelperCmd() *cobra.Command {
@@ -84,13 +89,13 @@ func writeCredentialResponse(writer io.Writer, protocol string, credential confi
 }
 
 func credentialHelperCommand(store *config.Store, account config.Account) string {
-	executable, err := os.Executable()
+	executable, err := credentialExecutable()
 	if err != nil || strings.TrimSpace(executable) == "" {
 		executable = "gha"
 	}
 	executable = filepath.ToSlash(executable)
 	configDir := store.Dir
-	if absolute, err := filepath.Abs(configDir); err == nil {
+	if absolute, err := credentialAbs(configDir); err == nil {
 		configDir = absolute
 	}
 	configDir = filepath.ToSlash(configDir)

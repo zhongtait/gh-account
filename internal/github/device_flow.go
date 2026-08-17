@@ -33,6 +33,8 @@ type userResponse struct {
 	Login string `json:"login"`
 }
 
+var waitForPoll = wait
+
 func (c *OAuthClient) requestDeviceCode(ctx context.Context, hostname string) (deviceCodeResponse, error) {
 	form := url.Values{}
 	form.Set("client_id", c.ClientID)
@@ -84,7 +86,7 @@ func (c *OAuthClient) pollToken(ctx context.Context, hostname string, device dev
 	for {
 		// GitHub's interval is a minimum delay between access-token polls;
 		// waiting before the first request avoids an immediate rate-limit hit.
-		if err := wait(ctx, interval); err != nil {
+		if err := waitForPoll(ctx, interval); err != nil {
 			return accessToken{}, err
 		}
 		form := url.Values{}

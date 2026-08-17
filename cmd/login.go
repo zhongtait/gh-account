@@ -75,13 +75,7 @@ func newLoginCmd() *cobra.Command {
 			}
 
 			if alias == "" {
-				alias, err = readValue(reader, "Alias", suggestAlias(loginName))
-				if err != nil {
-					return err
-				}
-			}
-			if strings.TrimSpace(alias) == "" {
-				return fmt.Errorf("alias is required")
+				alias = suggestAlias(loginName)
 			}
 
 			if gitName == "" {
@@ -89,19 +83,13 @@ func newLoginCmd() *cobra.Command {
 				if defaultName == "" {
 					defaultName = loginName
 				}
-				gitName, err = readValue(reader, "Git Name", defaultName)
-				if err != nil {
-					return err
-				}
+				gitName = defaultName
 			}
 			if email == "" {
 				email, err = readValue(reader, "Email", existing.Email)
 				if err != nil {
 					return err
 				}
-			}
-			if strings.TrimSpace(gitName) == "" {
-				return fmt.Errorf("git name is required")
 			}
 			if strings.TrimSpace(email) == "" {
 				return fmt.Errorf("email is required")

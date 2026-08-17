@@ -113,7 +113,7 @@ func TestLogoutRemovesOnlyRequestedCredential(t *testing.T) {
 	auth := config.DefaultAuth()
 	auth.Credentials[credentialKey("github.com", "one")] = config.Credential{Hostname: "github.com", Login: "one", AccessToken: "one-token"}
 	auth.Credentials[credentialKey("github.com", "two")] = config.Credential{Hostname: "github.com", Login: "two", AccessToken: "two-token"}
-	auth.Active = credentialKey("github.com", "two")
+	auth.Active = credentialKey("github.com", "one")
 	if err := store.SaveAuth(auth); err != nil {
 		t.Fatal(err)
 	}
@@ -130,5 +130,48 @@ func TestLogoutRemovesOnlyRequestedCredential(t *testing.T) {
 	}
 	if _, ok := updated.Credentials[credentialKey("github.com", "two")]; !ok {
 		t.Fatal("other credential was removed")
+	}
+	if updated.Active != "" {
+		t.Fatalf("active credential = %q, want empty", updated.Active)
+	}
+}
+
+func TestOAuthClientMissingCredentialsAndClientID(t *testing.T) {
+	store := config.NewStore(t.TempDir())
+	client := NewOAuthClient(store, io.Discard, "")
+	if _, err := client.CurrentLogin(context.Background()); err == nil {
+		t.Fatal("CurrentLogin succeeded without an active credential")
+	}
+	if err := client.Login(context.Background(), "github.com", "https"); err == nil {
+		t.Fatal("Login succeeded without an OAuth client ID")
+	}
+	if err := client.Logout(context.Background(), "alice", "github.com"); err == nil {
+		t.Fatal("Logout succeeded without a stored credential")
+	}
+}
+
+func TestSwitchUserRejectsAmbiguousLogin(t *testing.T) {
+	store := config.NewStore(t.TempDir())
+	auth := config.DefaultAuth()
+	for _, host := range []string{"github.com", "ghe.example"} {
+		key := credentialKey(host, "alice")
+		auth.Credentials[key] = config.Credential{Hostname: host, Login: "alice", AccessToken: host + "-token"}
+	}
+	if err := store.SaveAuth(auth); err != nil {
+		t.Fatal(err)
+	}
+	client := NewOAuthClient(store, io.Discard, "client-id")
+	if err := client.SwitchUser(context.Background(), "alice"); err == nil {
+		t.Fatal("SwitchUser accepted ambiguous credentials")
+	}
+	if err := client.SwitchUserAtHost(context.Background(), "alice", "ghe.example"); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := store.LoadAuth()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Active != credentialKey("ghe.example", "alice") {
+		t.Fatalf("active credential = %q", updated.Active)
 	}
 }

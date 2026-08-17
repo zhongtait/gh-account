@@ -1,10 +1,6 @@
 package cmd
 
-import (
-	"os"
-
-	"github.com/spf13/cobra"
-)
+import "github.com/spf13/cobra"
 
 func newCompletionCmd() *cobra.Command {
 	return &cobra.Command{
@@ -12,15 +8,16 @@ func newCompletionCmd() *cobra.Command {
 		Short: "Generate shell completion scripts",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			output := cmd.OutOrStdout()
 			switch args[0] {
 			case "bash":
-				return cmd.Root().GenBashCompletion(os.Stdout)
+				return cmd.Root().GenBashCompletion(output)
 			case "zsh":
-				return cmd.Root().GenZshCompletion(os.Stdout)
+				return cmd.Root().GenZshCompletion(output)
 			case "fish":
-				return cmd.Root().GenFishCompletion(os.Stdout, true)
+				return cmd.Root().GenFishCompletion(output, true)
 			case "powershell":
-				return cmd.Root().GenPowerShellCompletionWithDesc(os.Stdout)
+				return cmd.Root().GenPowerShellCompletionWithDesc(output)
 			default:
 				return cmd.Help()
 			}

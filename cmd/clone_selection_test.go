@@ -171,7 +171,7 @@ func TestCloneCommandFailureAndRetryPaths(t *testing.T) {
 	t.Cleanup(func() { cloneGit = oldClone })
 	t.Chdir(t.TempDir())
 	cloneLocalGit = func(string) cloneConfigurator {
-		return failingCloneConfig{credentialErr: errors.New("credential config")}
+		return failingCloneConfig{identityErr: errors.New("identity config")}
 	}
 	cloneGit = func(context.Context, string, string, io.Writer, io.Writer) error { return nil }
 	if err := clone.RunE(clone, []string{"https://github.com/alice/repo.git", "use", "alice"}); err == nil || !strings.Contains(err.Error(), "configure cloned") {

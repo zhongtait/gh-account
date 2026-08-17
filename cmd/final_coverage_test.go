@@ -16,9 +16,14 @@ import (
 	"github.com/zhongtait/gh-account/internal/utils"
 )
 
-type failingCloneConfig struct{ credentialErr error }
+type failingCloneConfig struct {
+	identityErr   error
+	credentialErr error
+}
 
-func (f failingCloneConfig) SetIdentity(context.Context, git.Scope, git.Identity) error { return nil }
+func (f failingCloneConfig) SetIdentity(context.Context, git.Scope, git.Identity) error {
+	return f.identityErr
+}
 func (f failingCloneConfig) SetCredentialHelper(context.Context, git.Scope, string, string) error {
 	return f.credentialErr
 }

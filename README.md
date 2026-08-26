@@ -135,14 +135,13 @@ gha doctor
 本地开发需要 Go 1.26.1 或更高版本。常用检查命令：
 
 ```bash
-go test ./... -cover      # 单元测试与覆盖率（当前为 100%）
-go test -race ./...       # 竞态检测
+go test ./... -race -cover # 单元测试、竞态检测与覆盖率
 go vet ./...              # 静态检查
 test -z "$(gofmt -l .)"  # 格式检查
 make build                # 构建 gha
 ```
 
-GitHub Actions 的 [CI workflow](.github/workflows/ci.yml) 会在 Pull Request 以及 `main`/`master` 推送时执行格式检查、`go vet`、单元测试，强制保持 100% statement coverage，并在 Ubuntu、macOS 和 Windows 上构建。
+GitHub Actions 的 [CI workflow](.github/workflows/ci.yml) 会在 Pull Request 以及 `main`/`master` 推送时执行格式检查、`go vet`、单元测试，强制保持 90% 以上 statement coverage，运行 `go test -race`，并在 Ubuntu、macOS 和 Windows 上构建。
 
 ## 版本与发布
 
@@ -190,6 +189,7 @@ gha --config-dir "${HOME}/.config/gha-dev" list
 | `gha list` | 列出账号 |
 | `gha use <alias>` | 切换账号并同步 Git 身份 |
 | `gha current` | 查看当前账号、Git 和 remote 状态 |
+| `gha status` | 查看当前账号在 GitHub 服务器端的登录状态 |
 | `gha doctor` | 检查 Git、配置和 OAuth 登录状态 |
 | `gha sync` | 根据当前 GitHub 账号同步 Git 身份 |
 | `gha auto` | 根据当前仓库 origin 自动选择账号，未登录时手动填写 |

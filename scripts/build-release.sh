@@ -18,6 +18,7 @@ targets=(
   "linux amd64"
   "linux arm64"
   "windows amd64"
+  "windows arm64"
 )
 
 resource_file="cmd/gha/resource.syso"

@@ -46,6 +46,16 @@ func TestRedactSensitiveData(t *testing.T) {
 			want: "Failed to authenticate with token ghp_...3456",
 		},
 		{
+			name: "redact fine-grained PAT",
+			text: "Failed with github_pat_11ABCDEFG0abcdefghij22_123456789012345678901234567890123456789012345678901234567890",
+			want: "Failed with gith...7890",
+		},
+		{
+			name: "redact fine-grained PAT variable length",
+			text: "token github_pat_AAAAAAAAAAAAAAAAAAAAAA_BBBBBBBBBBBBBBBBBBBBBB leaked",
+			want: "token gith...BBBB leaked",
+		},
+		{
 			name: "redact OAuth token",
 			text: "Using token gho_123456789012345678901234567890123456",
 			want: "Using token gho_...3456",

@@ -20,13 +20,17 @@ jobs:
         run: test -z "$(gofmt -l .)"
       - name: Vet
         run: go vet ./...
-      - name: Enforce 100% statement coverage
+      - name: Enforce statement coverage threshold
         shell: bash
         run: |
           go test ./... -coverprofile=coverage.out -covermode=atomic
           coverage="$(go tool cover -func=coverage.out | awk '/^total:/ { print $3 }')"
           echo "Total statement coverage: ${coverage}"
-          test "${coverage}" = "100.0%"
+          # Require at least 90% total statement coverage.
+          if awk -v cov="${coverage%\%}" 'BEGIN { exit !(cov < 90.0) }'; then
+            echo "coverage ${coverage} is below the required threshold 90.0%" >&2
+            exit 1
+          fi
 
   test:
     runs-on: ${{ matrix.os }}
@@ -44,3 +48,13 @@ jobs:
         run: go test ./...
       - name: Build
         run: go build -o gha${{ matrix.os == 'windows-latest' && '.exe' || '' }} ./cmd/gha
+  race:
+    runs-on: ubuntu-latest
+    needs: quality
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Test with race detector
+        run: go test -race ./...

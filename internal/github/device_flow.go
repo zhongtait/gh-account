@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/zhongtait/gh-account/internal/config"
@@ -32,6 +34,10 @@ type tokenResponse struct {
 type userResponse struct {
 	Login string `json:"login"`
 }
+
+// maxPollRetries bounds transient network retries so an offline machine
+// fails fast instead of spinning until the device code expires.
+const maxPollRetries = 5
 
 var waitForPoll = wait
 
@@ -83,11 +89,15 @@ func (c *OAuthClient) pollToken(ctx context.Context, hostname string, device dev
 	}
 	ctx, cancel := context.WithTimeout(ctx, deadline)
 	defer cancel()
+	retries := 0
 	for {
 		// GitHub's interval is a minimum delay between access-token polls;
 		// waiting before the first request avoids an immediate rate-limit hit.
 		if err := waitForPoll(ctx, interval); err != nil {
 			return accessToken{}, err
+		}
+		if ctx.Err() != nil {
+			return accessToken{}, ctx.Err()
 		}
 		form := url.Values{}
 		form.Set("client_id", c.ClientID)
@@ -95,7 +105,17 @@ func (c *OAuthClient) pollToken(ctx context.Context, hostname string, device dev
 		form.Set("grant_type", "urn:ietf:params:oauth:grant-type:device_code")
 		body, status, err := c.doForm(ctx, oauthURL(hostname, "/login/oauth/access_token"), form)
 		if err != nil {
-			return accessToken{}, err
+			// Transient transport failures (offline Wi-Fi, DNS hiccup) should
+			// not abort the whole device flow: keep polling until the code
+			// expires or the user cancels.
+			if ctx.Err() != nil {
+				return accessToken{}, ctx.Err()
+			}
+			if retries >= maxPollRetries || !isTransientNetErr(err) {
+				return accessToken{}, err
+			}
+			retries++
+			continue
 		}
 		var response tokenResponse
 		if jsonErr := json.Unmarshal(body, &response); jsonErr != nil {
@@ -138,4 +158,28 @@ func (c *OAuthClient) pollToken(ctx context.Context, hostname string, device dev
 			return accessToken{}, fmt.Errorf("GitHub OAuth error: %s", message)
 		}
 	}
+}
+
+// isTransientNetErr reports whether err looks like a transient network or
+// transport failure that is worth retrying while the device code is still
+// valid. DNS hiccups, connection resets and timeouts are common on flaky
+// links; aborting immediately would force the user to restart login.
+func isTransientNetErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true // includes *url.Error timeouts from http.Client
+	}
+	msg := strings.ToLower(err.Error())
+	for _, marker := range []string{"connection refused", "connection reset", "eof", "broken pipe", "no such host", "temporary failure", "tls:", "proxy"} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
 }

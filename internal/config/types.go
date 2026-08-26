@@ -48,6 +48,12 @@ type Credential struct {
 type AuthFile struct {
 	Active      string                `yaml:"active"`
 	Credentials map[string]Credential `yaml:"credentials"`
+	// UndecryptableKeys lists credentials whose encrypted token could not be
+	// decrypted during LoadAuth (for example after the auth key was rotated).
+	// The encrypted bytes stay in Credentials so saves round-trip them
+	// unchanged instead of silently deleting the entry. This field is not
+	// serialized.
+	UndecryptableKeys []string `yaml:"-"`
 }
 
 // DefaultAccounts returns an empty accounts document.

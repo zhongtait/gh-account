@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -21,8 +22,10 @@ import (
 
 // Store loads and persists gha configuration files.
 type Store struct {
-	Dir string
-	mu  sync.RWMutex
+	Dir                 string
+	mu                  sync.RWMutex
+	warningMu           sync.Mutex
+	warnedUndecryptable map[string]struct{}
 }
 
 type storeLocker interface {
@@ -49,7 +52,7 @@ var (
 
 // NewStore creates a store rooted at the given config directory.
 func NewStore(dir string) *Store {
-	return &Store{Dir: dir}
+	return &Store{Dir: dir, warnedUndecryptable: make(map[string]struct{})}
 }
 
 // DefaultStore creates a store using the default config location.
@@ -189,12 +192,38 @@ func (s *Store) UpdateConfig(update func(*ConfigFile) error) error {
 	})
 }
 
+// warnUndecryptable prints a one-time warning for credentials that could not
+// be decrypted so users learn about broken entries instead of losing access
+// silently. It never fails the operation.
+func (s *Store) warnUndecryptable(auth AuthFile) {
+	if len(auth.UndecryptableKeys) == 0 {
+		return
+	}
+	s.warningMu.Lock()
+	defer s.warningMu.Unlock()
+	if s.warnedUndecryptable == nil {
+		s.warnedUndecryptable = make(map[string]struct{})
+	}
+	for _, key := range auth.UndecryptableKeys {
+		if _, warned := s.warnedUndecryptable[key]; warned {
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "warning: stored credential %q cannot be decrypted; run \"gha login\" to repair it\n", key)
+		s.warnedUndecryptable[key] = struct{}{}
+	}
+}
+
 // LoadAuth reads the local OAuth credential store. Missing auth.yaml is
 // treated as an empty store so existing installations upgrade seamlessly.
 func (s *Store) LoadAuth() (AuthFile, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.loadAuth()
+	file, err := s.loadAuth()
+	if err != nil {
+		return file, err
+	}
+	s.warnUndecryptable(file)
+	return file, nil
 }
 
 func (s *Store) loadAuth() (AuthFile, error) {
@@ -213,17 +242,29 @@ func (s *Store) loadAuth() (AuthFile, error) {
 	if file.Credentials == nil {
 		file.Credentials = map[string]Credential{}
 	}
+	skipped := make([]string, 0, len(file.Credentials))
 	for key, credential := range file.Credentials {
 		if credential.EncryptedToken == "" {
 			continue
 		}
 		plain, decryptErr := s.decryptToken(key, credential.EncryptedToken)
 		if decryptErr != nil {
-			return AuthFile{}, fmt.Errorf("decrypt auth credential %q: %w", key, decryptErr)
+			// A single undecryptable credential (for example after the auth
+			// key was rotated or the entry was edited by hand) must not make
+			// the whole auth store unusable. Keep the encrypted bytes so a
+			// later save round-trips them unchanged, but mark the entry
+			// unreadable; users can run "gha login" again to repair it.
+			// Clear any legacy plaintext token too, so this entry cannot be
+			// selected despite having an invalid encrypted token.
+			credential.AccessToken = ""
+			file.Credentials[key] = credential
+			skipped = append(skipped, key)
+			continue
 		}
 		credential.AccessToken = plain
 		file.Credentials[key] = credential
 	}
+	file.UndecryptableKeys = skipped
 	return file, nil
 }
 
@@ -259,6 +300,9 @@ func (s *Store) UpdateAuth(update func(*AuthFile) error) error {
 		if err != nil {
 			return err
 		}
+		// Surface undecryptable entries so users learn about broken
+		// credentials instead of silently losing access to an account.
+		s.warnUndecryptable(file)
 		if err := update(&file); err != nil {
 			return err
 		}
@@ -272,7 +316,17 @@ func (s *Store) saveAuth(file AuthFile) error {
 		file.Credentials = map[string]Credential{}
 	}
 	toSave := AuthFile{Active: file.Active, Credentials: map[string]Credential{}}
+	undecryptable := make(map[string]bool, len(file.UndecryptableKeys))
+	for _, key := range file.UndecryptableKeys {
+		undecryptable[key] = true
+	}
 	for key, credential := range file.Credentials {
+		if undecryptable[key] && credential.EncryptedToken != "" {
+			// Round-trip entries that could not be decrypted without touching
+			// their ciphertext; deleting them here would destroy data.
+			toSave.Credentials[key] = credential
+			continue
+		}
 		if credential.AccessToken != "" {
 			encrypted, encryptErr := s.encryptToken(key, credential.AccessToken)
 			if encryptErr != nil {
@@ -462,6 +516,14 @@ func (s *Store) MatchDirectory(path string) (string, string, bool, error) {
 		return "", "", false, err
 	}
 
+	caseInsensitive := runtime.GOOS == "windows"
+	prefixFold := func(path, prefix string) bool {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+		return caseInsensitive && len(path) >= len(prefix) && strings.EqualFold(path[:len(prefix)], prefix)
+	}
+
 	var (
 		bestPrefix string
 		bestAlias  string
@@ -477,7 +539,8 @@ func (s *Store) MatchDirectory(path string) (string, string, bool, error) {
 		if err != nil {
 			return "", "", false, err
 		}
-		if absPath == absDir || strings.HasPrefix(absPath, absDir+string(os.PathSeparator)) {
+		exactMatch := absPath == absDir || (caseInsensitive && strings.EqualFold(absPath, absDir))
+		if exactMatch || prefixFold(absPath, absDir+string(os.PathSeparator)) {
 			if !found || len(absDir) > len(bestPrefix) {
 				bestPrefix = absDir
 				bestAlias = binding.Account

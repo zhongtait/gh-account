@@ -126,9 +126,9 @@ func resolveEditor() string {
 }
 
 func openInEditor(editor, path string) error {
-	parts := strings.Fields(editor)
-	if len(parts) == 0 {
-		return fmt.Errorf("invalid editor: %q", editor)
+	parts, err := splitEditorCommand(editor)
+	if err != nil {
+		return err
 	}
 	args := append(parts[1:], path)
 	cmd := exec.Command(parts[0], args...)
@@ -139,4 +139,52 @@ func openInEditor(editor, path string) error {
 		return fmt.Errorf("failed to open editor %s: %w", editor, err)
 	}
 	return nil
+}
+
+// splitEditorCommand parses an editor command line with quote awareness so
+// values like EDITOR="C:\Program Files\VS Code\bin\code" --wait keep the
+// executable path intact instead of being split on spaces.
+func splitEditorCommand(editor string) ([]string, error) {
+	var parts []string
+	var current strings.Builder
+	inSingle, inDouble := false, false
+	started := false
+
+	flush := func() error {
+		if !started {
+			return nil
+		}
+		parts = append(parts, current.String())
+		current.Reset()
+		started = false
+		return nil
+	}
+
+	for _, r := range editor {
+		switch {
+		case r == '\'' && !inDouble:
+			inSingle = !inSingle
+			started = true
+		case r == '"' && !inSingle:
+			inDouble = !inDouble
+			started = true
+		case (r == ' ' || r == '\t') && !inSingle && !inDouble:
+			if err := flush(); err != nil {
+				return nil, err
+			}
+		default:
+			current.WriteRune(r)
+			started = true
+		}
+	}
+	if err := flush(); err != nil {
+		return nil, err
+	}
+	if inSingle || inDouble {
+		return nil, fmt.Errorf("unterminated quote in editor command: %q", editor)
+	}
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("invalid editor: %q", editor)
+	}
+	return parts, nil
 }

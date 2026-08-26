@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -241,6 +242,30 @@ func TestSwitchAndLogoutBranches(t *testing.T) {
 	}
 }
 
+func TestSwitchUserSkipsUndecryptableCredential(t *testing.T) {
+	store := config.NewStore(t.TempDir())
+	if err := os.MkdirAll(store.Dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	data := []byte("credentials:\n  'github.com|broken':\n    hostname: github.com\n    login: broken\n    encrypted_token: v1:not-valid\n")
+	if err := os.WriteFile(utils.AuthPath(store.Dir), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	client := NewOAuthClient(store, io.Discard, "id")
+	err := client.SwitchUserAtHost(context.Background(), "broken", "github.com")
+	if err == nil || !strings.Contains(err.Error(), "no OAuth credential") {
+		t.Fatalf("undecryptable credential was selectable: %v", err)
+	}
+	auth, err := store.LoadAuth()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if auth.Active != "" {
+		t.Fatalf("active credential changed to %q", auth.Active)
+	}
+}
+
 func TestHTTPErrorBranches(t *testing.T) {
 	ctx := context.Background()
 	c := NewOAuthClient(config.NewStore(t.TempDir()), io.Discard, "id")
@@ -354,9 +379,24 @@ func TestPollTokenResponses(t *testing.T) {
 	}
 
 	c := NewOAuthClient(config.NewStore(t.TempDir()), io.Discard, "id")
-	c.HTTP = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) { return nil, errors.New("offline") })}
-	if _, err := c.pollToken(context.Background(), "github.com", device); err == nil {
-		t.Fatal("transport error ignored")
+	c.HTTP = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) { return nil, errors.New("invalid request payload") })}
+	if _, err := c.pollToken(context.Background(), "github.com", device); err == nil || !strings.Contains(err.Error(), "invalid request payload") {
+		t.Fatalf("non-transient transport error not surfaced: %v", err)
+	}
+
+	// Transient network errors are retried; a later non-transient failure
+	// still surfaces instead of looping forever.
+	retries := 0
+	c2 := NewOAuthClient(config.NewStore(t.TempDir()), io.Discard, "id")
+	c2.HTTP = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		retries++
+		if retries <= maxPollRetries {
+			return nil, &net.OpError{Op: "dial", Err: errors.New("connection refused")}
+		}
+		return nil, errors.New("non-transient after retry")
+	})}
+	if _, err := c2.pollToken(context.Background(), "github.com", device); err == nil || !strings.Contains(err.Error(), "non-transient") || retries != maxPollRetries+1 {
+		t.Fatalf("transient retry behavior = %v, retries=%d", err, retries)
 	}
 	waitForPoll = func(context.Context, time.Duration) error { return context.Canceled }
 	if _, err := c.pollToken(context.Background(), "github.com", device); !errors.Is(err, context.Canceled) {

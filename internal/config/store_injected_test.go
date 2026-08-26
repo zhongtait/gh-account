@@ -160,11 +160,23 @@ func TestInjectedLoadSaveAndAccountErrors(t *testing.T) {
 	if err != nil || auth.Credentials == nil {
 		t.Fatalf("nil auth = %+v, %v", auth, err)
 	}
-	if err := os.WriteFile(utils.AuthPath(store.Dir), []byte("credentials:\n  key:\n    encrypted_token: plain\n"), 0o600); err != nil {
+	if err := os.WriteFile(utils.AuthPath(store.Dir), []byte("credentials:\n  key:\n    access_token: legacy-plaintext\n    encrypted_token: plain\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.LoadAuth(); err == nil || !strings.Contains(err.Error(), "decrypt auth credential") {
+	auth, err = store.LoadAuth()
+	if err != nil {
 		t.Fatal(err)
+	}
+	// Corrupt credentials are kept (for round-tripping) but marked
+	// undecryptable so one bad entry cannot break the store.
+	if len(auth.UndecryptableKeys) != 1 || auth.UndecryptableKeys[0] != "key" {
+		t.Fatalf("expected corrupt credential to be marked undecryptable, got %v", auth.UndecryptableKeys)
+	}
+	if auth.Credentials["key"].EncryptedToken == "" {
+		t.Fatal("expected encrypted bytes to be preserved for round-tripping")
+	}
+	if auth.Credentials["key"].AccessToken != "" {
+		t.Fatal("undecryptable credential must not expose a token")
 	}
 	missingStore := NewStore(t.TempDir())
 	if err := missingStore.UpsertAccount("alice", validAccount("alice")); err != nil {

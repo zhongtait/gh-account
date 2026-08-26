@@ -142,6 +142,33 @@ func TestMatchDirectoryLongestPrefix(t *testing.T) {
 	}
 }
 
+func TestMatchDirectoryExactPathIsCaseInsensitiveOnWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows path comparison only")
+	}
+	dir := t.TempDir()
+	store := NewStore(dir)
+	if err := store.EnsureInitialized(); err != nil {
+		t.Fatal(err)
+	}
+	bindingDir := filepath.Join(dir, "Workspace")
+	if err := os.MkdirAll(bindingDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := DefaultConfig()
+	cfg.Directories = map[string]DirectoryBinding{bindingDir: {Account: "work"}}
+	if err := store.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	alias, _, found, err := store.MatchDirectory(strings.ToLower(bindingDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || alias != "work" {
+		t.Fatalf("case-insensitive exact match = found=%v alias=%q", found, alias)
+	}
+}
+
 func TestUpsertAccountRejectsInvalidValues(t *testing.T) {
 	store := NewStore(t.TempDir())
 	if err := store.EnsureInitialized(); err != nil {

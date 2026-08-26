@@ -8,3 +8,5 @@ dist/
 coverage.out
 coverage.html
 /gha
+.gocache/
+.gocache-review/

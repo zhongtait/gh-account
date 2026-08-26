@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -11,25 +12,36 @@ import (
 )
 
 type fakeTransport struct {
-	responses []string
-	statuses  []int
-	requests  []*http.Request
+	responses     []string
+	statuses      []int
+	requests      []*http.Request
+	requestBodies []string
 }
 
 func (f *fakeTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	body := ""
+	if request.Body != nil {
+		data, err := io.ReadAll(request.Body)
+		if err != nil {
+			return nil, err
+		}
+		body = string(data)
+		request.Body = io.NopCloser(strings.NewReader(body))
+	}
 	f.requests = append(f.requests, request)
+	f.requestBodies = append(f.requestBodies, body)
 	index := len(f.requests) - 1
 	status := http.StatusOK
 	if index < len(f.statuses) && f.statuses[index] != 0 {
 		status = f.statuses[index]
 	}
-	body := "{}"
+	responseBody := "{}"
 	if index < len(f.responses) {
-		body = f.responses[index]
+		responseBody = f.responses[index]
 	}
 	return &http.Response{
 		StatusCode: status,
-		Body:       io.NopCloser(strings.NewReader(body)),
+		Body:       io.NopCloser(strings.NewReader(responseBody)),
 		Header:     make(http.Header),
 		Request:    request,
 	}, nil
@@ -39,7 +51,7 @@ func TestLoginDeviceFlowStoresCredential(t *testing.T) {
 	transport := &fakeTransport{responses: []string{
 		`{"device_code":"device","user_code":"ABCD-EFGH","verification_uri":"https://github.com/login/device","verification_uri_complete":"https://github.com/login/device?user_code=ABCD-EFGH","expires_in":600,"interval":1}`,
 		`{"error":"authorization_pending"}`,
-		`{"access_token":"secret-token","token_type":"bearer","scope":"read:user,repo"}`,
+		`{"access_token":"secret-token","token_type":"bearer","scope":"read:user,repo,workflow"}`,
 		`{"login":"personal-user"}`,
 	}}
 	store := config.NewStore(t.TempDir())
@@ -69,6 +81,13 @@ func TestLoginDeviceFlowStoresCredential(t *testing.T) {
 	}
 	if got := transport.requests[1].URL.Path; got != "/login/oauth/access_token" {
 		t.Fatalf("unexpected token endpoint: %s", got)
+	}
+	deviceForm, err := url.ParseQuery(transport.requestBodies[0])
+	if err != nil {
+		t.Fatalf("parse device request: %v", err)
+	}
+	if got := deviceForm.Get("scope"); got != defaultScope {
+		t.Fatalf("requested OAuth scope = %q, want %q", got, defaultScope)
 	}
 	if got := transport.requests[3].Header.Get("Authorization"); got != "Bearer secret-token" {
 		t.Fatalf("unexpected authorization header: %q", got)

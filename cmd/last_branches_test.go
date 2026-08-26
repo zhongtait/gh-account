@@ -226,13 +226,14 @@ func TestRemainingCredentialDoctorRemoteLogout(t *testing.T) {
 	}
 
 	deps.Store = store
-	// Doctor renders both healthy and unhealthy reports.
+	// Doctor renders a healthy report and succeeds.
 	if err := newDoctorCmd().RunE(newDoctorCmd(), nil); err != nil {
 		t.Fatal(err)
 	}
+	// Doctor now fails when the environment is unhealthy.
 	deps.Store = config.NewStore(t.TempDir())
-	if err := newDoctorCmd().RunE(newDoctorCmd(), nil); err != nil {
-		t.Fatal(err)
+	if err := newDoctorCmd().RunE(newDoctorCmd(), nil); err == nil || !strings.Contains(err.Error(), "environment checks failed") {
+		t.Fatalf("unhealthy doctor report did not fail: %v", err)
 	}
 	deps.Store = store
 	gh.logoutErr = nil

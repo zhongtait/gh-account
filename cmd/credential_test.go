@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"path/filepath"
 	"strings"
@@ -79,6 +80,35 @@ func TestCredentialHelperIgnoresOtherHostsAndOperations(t *testing.T) {
 	}
 }
 
+func TestCredentialHelperCommandResolvesPathLookup(t *testing.T) {
+	originalLookPath, originalExecutable := credentialLookPath, credentialExecutable
+	t.Cleanup(func() { credentialLookPath, credentialExecutable = originalLookPath, originalExecutable })
+
+	store := config.NewStore(t.TempDir())
+
+	// Prefer the binary that is currently running, even if PATH contains a
+	// different gha executable.
+	credentialLookPath = func(string) (string, error) { return "C:/bin/gha.exe", nil }
+	credentialExecutable = func() (string, error) { return "C:/current/gha.exe", nil }
+	if got := credentialHelperCommand(store, config.Account{Hostname: "github.com", Login: "u"}); !strings.Contains(got, "!'C:/current/gha.exe' ") {
+		t.Fatalf("expected current executable, got %q", got)
+	}
+
+	// If the executable path is unavailable, fall back to PATH lookup.
+	credentialExecutable = func() (string, error) { return "", errors.New("not found") }
+	credentialLookPath = func(string) (string, error) { return "gha.exe", nil }
+	if got := credentialHelperCommand(store, config.Account{Hostname: "github.com", Login: "u"}); strings.Contains(got, "!'gha.exe' ") {
+		t.Fatalf("relative gha path was stored: %q", got)
+	}
+
+	// gha missing from PATH: fall back to the running binary's path.
+	credentialLookPath = func(string) (string, error) { return "", errors.New("not found") }
+	credentialExecutable = func() (string, error) { return filepath.Join("D", "tools", "gha.exe"), nil }
+	got := credentialHelperCommand(store, config.Account{Hostname: "github.com", Login: "u"})
+	if !strings.Contains(got, "!'"+filepath.ToSlash(filepath.Join("D", "tools", "gha.exe"))+"' ") {
+		t.Fatalf("expected fallback to executable path, got %q", got)
+	}
+}
 func TestCredentialHelperCommandUsesConfiguredStore(t *testing.T) {
 	storeDir := filepath.Join(t.TempDir(), "gha config")
 	store := config.NewStore(storeDir)

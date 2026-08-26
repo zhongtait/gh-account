@@ -122,8 +122,8 @@ func runLoginForAuto(cmd *cobra.Command, info remote.Info, reader *bufio.Reader)
 	loginCmd.SetOut(deps.Stdout)
 	loginCmd.SetErr(deps.Stderr)
 	_ = loginCmd.Flags().Set("hostname", info.Host)
-	if info.Protocol != "" {
-		_ = loginCmd.Flags().Set("protocol", info.Protocol)
+	if protocol := remote.AccountProtocol(info.Protocol); protocol != "" {
+		_ = loginCmd.Flags().Set("protocol", protocol)
 	}
 	if err := loginCmd.RunE(loginCmd, nil); err != nil {
 		return "", err
@@ -214,7 +214,7 @@ func promptAutoAccount(reader *bufio.Reader, info remote.Info, existingAlias str
 		email = promptWithDefault(reader, "Email", "")
 	}
 
-	protocolDefault := info.Protocol
+	protocolDefault := remote.AccountProtocol(info.Protocol)
 	if existing.Protocol != "" {
 		protocolDefault = existing.Protocol
 	}
@@ -224,6 +224,9 @@ func promptAutoAccount(reader *bufio.Reader, info remote.Info, existingAlias str
 	protocol := protocolFlag
 	if protocol == "" {
 		protocol = promptWithDefault(reader, "Protocol [https/ssh]", protocolDefault)
+	}
+	if normalized := remote.AccountProtocol(protocol); normalized != "" {
+		protocol = normalized
 	}
 
 	return accountAlias, config.Account{

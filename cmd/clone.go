@@ -217,7 +217,9 @@ func runLoginForClone(cmd *cobra.Command, info remote.Info) (string, error) {
 	loginCmd.SetOut(deps.Stdout)
 	loginCmd.SetErr(deps.Stderr)
 	_ = loginCmd.Flags().Set("hostname", info.Host)
-	_ = loginCmd.Flags().Set("protocol", info.Protocol)
+	if protocol := remote.AccountProtocol(info.Protocol); protocol != "" {
+		_ = loginCmd.Flags().Set("protocol", protocol)
+	}
 	if err := loginCmd.RunE(loginCmd, nil); err != nil {
 		return "", fmt.Errorf("automatic GitHub login failed: %w", err)
 	}

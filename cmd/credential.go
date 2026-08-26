@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -15,6 +16,7 @@ import (
 var (
 	credentialExecutable = os.Executable
 	credentialAbs        = filepath.Abs
+	credentialLookPath   = exec.LookPath
 )
 
 // newCredentialHelperCmd implements Git's credential helper protocol. Git
@@ -89,11 +91,22 @@ func writeCredentialResponse(writer io.Writer, protocol string, credential confi
 }
 
 func credentialHelperCommand(store *config.Store, account config.Account) string {
-	executable, err := credentialExecutable()
-	if err != nil || strings.TrimSpace(executable) == "" {
+	// Pin the helper to the currently running binary. Git may invoke it later
+	// from an IDE, GUI, or service with a different PATH, and PATH may also
+	// contain an older gha binary than the one the user just ran.
+	var executable string
+	if self, selfErr := credentialExecutable(); selfErr == nil && strings.TrimSpace(self) != "" {
+		executable = filepath.ToSlash(self)
+	} else if path, err := credentialLookPath("gha"); err == nil && strings.TrimSpace(path) != "" {
+		if !filepath.IsAbs(path) {
+			if absolute, absErr := filepath.Abs(path); absErr == nil {
+				path = absolute
+			}
+		}
+		executable = filepath.ToSlash(path)
+	} else {
 		executable = "gha"
 	}
-	executable = filepath.ToSlash(executable)
 	configDir := store.Dir
 	if absolute, err := credentialAbs(configDir); err == nil {
 		configDir = absolute

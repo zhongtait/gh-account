@@ -14,11 +14,15 @@ import (
 
 	"github.com/zhongtait/gh-account/internal/clipboard"
 	"github.com/zhongtait/gh-account/internal/config"
+	"github.com/zhongtait/gh-account/internal/utils"
 )
 
 const (
 	defaultHostname = "github.com"
-	defaultScope    = "read:user,repo"
+	// workflow is required when GitHub Actions workflow files are pushed.
+	// Existing tokens do not gain new scopes automatically; re-running
+	// `gha login <alias>` requests this expanded set and replaces the token.
+	defaultScope = "read:user,repo,workflow"
 )
 
 // Client abstracts GitHub authentication operations.
@@ -152,6 +156,11 @@ func (c *OAuthClient) SwitchUserAtHost(ctx context.Context, login string, hostna
 		var match string
 		for key, credential := range auth.Credentials {
 			if !strings.EqualFold(credential.Login, login) {
+				continue
+			}
+			// LoadAuth retains undecryptable entries so a later login can
+			// repair them, but they must not be selectable as active.
+			if strings.TrimSpace(credential.AccessToken) == "" {
 				continue
 			}
 			if hostname != "" && !strings.EqualFold(normalizeHostname(credential.Hostname), hostname) {
@@ -356,18 +365,7 @@ func (c *OAuthClient) httpClient() *http.Client {
 }
 
 func normalizeHostname(hostname string) string {
-	hostname = strings.TrimSpace(hostname)
-	lower := strings.ToLower(hostname)
-	if strings.HasPrefix(lower, "https://") {
-		hostname = hostname[len("https://"):]
-	} else if strings.HasPrefix(lower, "http://") {
-		hostname = hostname[len("http://"):]
-	}
-	hostname = strings.TrimSuffix(hostname, "/")
-	if hostname == "" {
-		return defaultHostname
-	}
-	return strings.ToLower(hostname)
+	return utils.NormalizeHostname(hostname)
 }
 
 func oauthURL(hostname, path string) string {

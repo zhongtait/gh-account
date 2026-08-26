@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -484,7 +486,11 @@ func TestEditAndIdentityHelpers(t *testing.T) {
 	if err := store.UpsertAccount("alice", config.Account{Login: "alice", Hostname: "github.com", GitName: "Alice", Email: "alice@example.com", Protocol: "https"}); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("EDITOR", "true")
+	editor := "true"
+	if runtime.GOOS == "windows" {
+		editor = "cmd /c exit 0"
+	}
+	t.Setenv("EDITOR", editor)
 	if got := resolveEditor(); got == "" {
 		t.Fatal("editor not resolved")
 	}
@@ -510,6 +516,31 @@ func TestEditAndIdentityHelpers(t *testing.T) {
 	deps.GitHub = loginOnlyGitHub{login: "fallback"}
 	if login, host, err := currentGitHubIdentity(context.Background()); err != nil || login != "fallback" || host != "github.com" {
 		t.Fatal("missing identity client accepted")
+	}
+}
+
+func TestSplitEditorCommandPreservesQuotedTokens(t *testing.T) {
+	tests := []struct {
+		input string
+		want  []string
+	}{
+		{input: `"C:\\Program Files\\Code\\code.exe" --wait`, want: []string{`C:\\Program Files\\Code\\code.exe`, "--wait"}},
+		{input: `fake ""`, want: []string{"fake", ""}},
+		{input: `foo"bar" --flag="x"`, want: []string{"foobar", "--flag=x"}},
+		{input: `""`, want: []string{""}},
+	}
+	for _, test := range tests {
+		got, err := splitEditorCommand(test.input)
+		if err != nil {
+			t.Errorf("splitEditorCommand(%q): %v", test.input, err)
+			continue
+		}
+		if !reflect.DeepEqual(got, test.want) {
+			t.Errorf("splitEditorCommand(%q) = %#v, want %#v", test.input, got, test.want)
+		}
+	}
+	if _, err := splitEditorCommand(`"unterminated`); err == nil {
+		t.Fatal("unterminated quote accepted")
 	}
 }
 

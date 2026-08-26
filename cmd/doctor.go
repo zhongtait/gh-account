@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"github.com/spf13/cobra"
 	"github.com/zhongtait/gh-account/internal/doctor"
 	"github.com/zhongtait/gh-account/internal/terminal"
@@ -25,10 +26,10 @@ func newDoctorCmd() *cobra.Command {
 				}
 			}
 
-			if report.Healthy() {
-				terminal.Success(deps.Stdout, "Everything looks good.")
-				return nil
+			if !report.Healthy() {
+				return fmt.Errorf("environment checks failed; see output above")
 			}
+			terminal.Success(deps.Stdout, "Everything looks good.")
 			return nil
 		},
 	}

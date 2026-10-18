@@ -12,8 +12,9 @@ import (
 
 func newCurrentCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "current",
-		Short: "Show current GitHub and git identity state",
+		Use:     "current",
+		Aliases: []string{"whoami"},
+		Short:   "Show current GitHub and git identity state",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := commandContext(cmd)
 

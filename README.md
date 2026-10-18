@@ -17,6 +17,9 @@
 - 根据当前 GitHub 仓库的 `origin` remote 自动选择账号
 - 提供登录、退出、编辑、诊断和 Shell completion
 - 通过指定账号或自动选择账号克隆 GitHub 仓库，并把账号凭据和 Git 身份写入新仓库的本地配置
+- **Git 命令透明兼容与代理**：`gha git clone` 等同于 `gha clone`；支持 `gha git <command>` 透明转发，并可通过 `--account` / `-a` 临时指定账号上下文
+- **快速打开浏览器**：`gha open`（别名 `browse`）一键在系统浏览器中打开当前仓库或指定账号的 GitHub 页面
+- **交互式账号切换与别名**：`gha use` / `gha switch` 支持交互式列出与选择账号，支持 `gha whoami` 与 `gha status` 快捷查看状态
 
 ## 环境要求
 
@@ -187,13 +190,19 @@ gha --config-dir "${HOME}/.config/gha-dev" list
 | `gha init` | 创建配置目录和默认文件 |
 | `gha add` | 新增账号 |
 | `gha list` | 列出账号 |
-| `gha use <alias>` | 切换账号并同步 Git 身份 |
-| `gha current` | 查看当前账号、Git 和 remote 状态 |
+| `gha use [alias]` | 切换账号并同步 Git 身份（未指定参数时交互式选择，别名 `switch`） |
+| `gha current` | 查看当前账号、Git 和 remote 状态（别名 `whoami`） |
 | `gha status` | 查看当前账号在 GitHub 服务器端的登录状态 |
+| `gha git <command...>` / `gha <git-command>` | Git 原生命令透明代理（`gha push` 等同于 `gha git push`，支持 `-a`/`--account` 指定临时账号） |
+| `gha git clone <repo>` | Git 兼容克隆，等同于 `gha clone` |
+| `gha token [alias]` | 查看或复制指定/当前账号的 OAuth Token（支持 `-c` 复制到剪贴板，借鉴 `gh auth token`） |
+| `gha gh <command...>` | GitHub CLI 深度集成：执行 `gh` 命令时自动注入对应账号的 `GH_TOKEN` 与 `GH_HOST` |
+| `gha pr` / `gha issue` / `gha run` / `gha api` | GitHub CLI 快捷指令透传（自动注入当前激活账号凭据） |
+| `gha open [alias]` | 在浏览器中打开当前仓库或账号主页（支持 `--pr`, `--issues`, `--actions`，别名 `browse`） |
 | `gha doctor` | 检查 Git、配置和 OAuth 登录状态 |
 | `gha sync` | 根据当前 GitHub 账号同步 Git 身份 |
 | `gha auto` | 根据当前仓库 origin 自动选择账号，未登录时手动填写 |
-| `gha login <alias>` | 登录并保存账号配置 |
+| `gha login <alias>` | 登录并保存账号配置（自动请求 `read:user`, `repo`, `workflow` 作用域） |
 | `gha clone <repo> use <alias>` | 使用指定账号克隆仓库并写入仓库本地配置 |
 | `gha clone <repo>` | 自动选择账号；没有可用凭据时进入 OAuth 登录 |
 | `gha logout <alias>` | 删除本地保存的指定 OAuth credential |
@@ -205,9 +214,48 @@ gha --config-dir "${HOME}/.config/gha-dev" list
 常用选项：
 
 ```bash
+# 交互式切换账号（或直接 gha switch）
+gha use
+
+# 全局切换账号并更新 remote
 gha use personal --global
 gha use personal --update-remote
 gha sync --global
+
+# 查看或提取 OAuth Token（支持直接复制到剪贴板，方便脚本与第三方工具调用）
+gha token                      # 打印当前激活账号的 Access Token
+gha token work                 # 打印 work 账号的 Access Token
+gha token -c                   # 复制当前账号 Token 到系统剪贴板
+
+# GitHub CLI (gh) 深度集成与多账号上下文无缝注入
+gha gh pr list                 # 自动以当前激活账号身份查看 PR 列表
+gha --account work gh pr create # 临时指定 work 账号创建 PR
+gha pr list                    # 快捷指令（直接无缝透传至 gh pr list）
+gha issue list                 # 快捷指令（直接无缝透传至 gh issue list）
+gha api /user                  # 快捷调用 GitHub REST API
+
+# Git 完整无感转移（中间加不加 git 完全一致）
+gha clone https://github.com/OWNER/REPO.git       # 等同于 gha git clone ...
+gha status                                       # 等同于 gha git status
+gha push origin main                             # 等同于 gha git push origin main
+gha commit -m "feat: hello"                      # 等同于 gha git commit -m ...
+gha log -n 5                                     # 等同于 gha git log -n 5
+gha diff                                         # 等同于 gha git diff
+
+# 临时以指定账号身份执行任意 Git 操作（不污染全局配置）
+gha --account work push origin main
+gha git -a personal commit -m "feat: updates"
+
+# GHA 专属功能在 gha git 下同样可用
+gha git use work                                 # 等同于 gha use work
+gha git whoami                                   # 等同于 gha whoami / gha current
+
+# 一键在浏览器中打开当前仓库、PR 列表、Issues、Actions 或个人主页
+gha open                                         # 打开当前仓库页面
+gha open --pr                                    # 打开当前仓库 PRs 页面
+gha open --issues                                # 打开当前仓库 Issues 页面
+gha open --actions                               # 打开当前仓库 Actions 流水线页面
+gha open personal                                # 打开 personal 账号个人主页
 
 # 使用指定账号克隆私有仓库
 gha clone https://github.com/OWNER/PRIVATE_REPO.git use personal

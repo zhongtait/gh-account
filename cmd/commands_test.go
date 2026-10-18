@@ -79,10 +79,10 @@ func (g *commandGit) SetCredentialHelper(context.Context, git.Scope, string, str
 }
 
 type commandGitHub struct {
-	login, host                                             string
-	hasCredential                                           bool
-	clientID                                                string
-	loginErr, switchErr, oauthErr, logoutErr, credentialErr error
+	login, host                                                        string
+	hasCredential                                                      bool
+	clientID                                                           string
+	loginErr, switchErr, oauthErr, logoutErr, credentialErr, statusErr error
 }
 
 type loginOnlyGitHub struct {
@@ -115,9 +115,17 @@ func (g *commandGitHub) CurrentIdentity(context.Context) (string, string, error)
 }
 func (g *commandGitHub) SwitchUser(context.Context, string) error               { return g.switchErr }
 func (g *commandGitHub) SwitchUserAtHost(context.Context, string, string) error { return g.switchErr }
-func (g *commandGitHub) Status(context.Context) (string, error)                 { return "ok", nil }
-func (g *commandGitHub) Login(context.Context, string, string) error            { return g.oauthErr }
-func (g *commandGitHub) Logout(context.Context, string, string) error           { return g.logoutErr }
+func (g *commandGitHub) Status(context.Context) (string, error) {
+	if g.statusErr != nil {
+		return "", g.statusErr
+	}
+	if g.login == "" {
+		return "", errors.New("not logged in")
+	}
+	return "logged in to " + g.host + " as " + g.login, nil
+}
+func (g *commandGitHub) Login(context.Context, string, string) error  { return g.oauthErr }
+func (g *commandGitHub) Logout(context.Context, string, string) error { return g.logoutErr }
 func (g *commandGitHub) HasCredential(context.Context, string, string) (bool, error) {
 	return g.hasCredential, g.credentialErr
 }

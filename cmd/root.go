@@ -47,8 +47,118 @@ var (
 // Execute runs the root command.
 func Execute() error {
 	terminal.DisableColorIfNeeded()
+	return ExecuteArgs(os.Args[1:])
+}
+
+// ExecuteArgs executes the CLI with the given command-line arguments.
+func ExecuteArgs(args []string) error {
+	return ExecuteContextArgs(context.Background(), args)
+}
+
+// ExecuteContextArgs executes the CLI with the given context and command-line arguments.
+func ExecuteContextArgs(ctx context.Context, args []string) error {
 	root := NewRootCommand()
-	return root.Execute()
+	root.SetContext(ctx)
+
+	if len(args) == 0 {
+		return root.Execute()
+	}
+
+	if isKnownRootCommand(root, args) {
+		root.SetArgs(args)
+		return root.Execute()
+	}
+
+	args = extractLeadingRootFlags(args)
+
+	if err := setupDeps(root); err != nil {
+		return err
+	}
+
+	cmdName, _ := findFirstNonFlag(args)
+	if isKnownGHCommand(cmdName) {
+		ghCmd := newGHCmd()
+		ghCmd.SetContext(ctx)
+		return ghCmd.RunE(ghCmd, args)
+	}
+
+	gitCmd := newGitCmd()
+	gitCmd.SetContext(ctx)
+	return gitCmd.RunE(gitCmd, args)
+}
+
+func isKnownGHCommand(name string) bool {
+	switch name {
+	case "pr", "issue", "issues", "api", "run", "gist", "release", "search", "workflow", "codespace":
+		return true
+	default:
+		return false
+	}
+}
+
+func extractLeadingRootFlags(args []string) []string {
+	_, firstCmdIdx := findFirstNonFlag(args)
+	if firstCmdIdx == -1 {
+		firstCmdIdx = len(args)
+	}
+
+	var remaining []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if i < firstCmdIdx {
+			if arg == "--config-dir" && i+1 < firstCmdIdx {
+				flagConfigDir = args[i+1]
+				i++
+				continue
+			} else if strings.HasPrefix(arg, "--config-dir=") {
+				flagConfigDir = strings.TrimPrefix(arg, "--config-dir=")
+				continue
+			} else if arg == "--client-id" && i+1 < firstCmdIdx {
+				flagClientID = args[i+1]
+				i++
+				continue
+			} else if strings.HasPrefix(arg, "--client-id=") {
+				flagClientID = strings.TrimPrefix(arg, "--client-id=")
+				continue
+			} else if arg == "--no-browser" {
+				flagNoBrowser = true
+				continue
+			}
+		}
+		remaining = append(remaining, arg)
+	}
+	return remaining
+}
+
+func isKnownRootCommand(root *cobra.Command, args []string) bool {
+	firstNonFlag, _ := findFirstNonFlag(args)
+	if firstNonFlag == "" {
+		return true
+	}
+	for _, c := range root.Commands() {
+		if c.Name() == firstNonFlag || c.HasAlias(firstNonFlag) {
+			return true
+		}
+	}
+	return false
+}
+
+func findFirstNonFlag(args []string) (string, int) {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--config-dir" || arg == "--client-id" || arg == "--account" || arg == "-a" {
+			i++
+			continue
+		}
+		if strings.HasPrefix(arg, "--account=") || strings.HasPrefix(arg, "-a=") || strings.HasPrefix(arg, "--config-dir=") || strings.HasPrefix(arg, "--client-id=") {
+			continue
+		}
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		return arg, i
+	}
+	return "", -1
 }
 
 // NewRootCommand builds the CLI command tree.
@@ -82,6 +192,10 @@ func NewRootCommand() *cobra.Command {
 	root.AddCommand(newRemoteCmd())
 	root.AddCommand(newAutoCmd())
 	root.AddCommand(newCloneCmd())
+	root.AddCommand(newGitCmd())
+	root.AddCommand(newGHCmd())
+	root.AddCommand(newTokenCmd())
+	root.AddCommand(newOpenCmd())
 	root.AddCommand(newCredentialHelperCmd())
 	root.AddCommand(newCompletionCmd())
 	root.AddCommand(newVersionCmd())

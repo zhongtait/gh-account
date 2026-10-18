@@ -1,8 +1,12 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/zhongtait/gh-account/internal/config"
@@ -14,16 +18,30 @@ import (
 
 func newUseCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:               "use <alias>",
+		Use:               "use [alias]",
+		Aliases:           []string{"switch"},
 		Short:             "Switch GitHub account and sync git identity",
-		Args:              cobra.ExactArgs(1),
+		Args:              cobra.MaximumNArgs(1),
 		ValidArgsFunction: completeAccountAliases,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := requireInitialized(); err != nil {
 				return err
 			}
 
-			alias := args[0]
+			ctx := commandContext(cmd)
+			alias := ""
+			if len(args) == 1 {
+				alias = args[0]
+			} else {
+				var err error
+				alias, err = promptSelectAccount(ctx)
+				if err != nil {
+					return err
+				}
+				if alias == "" {
+					return nil
+				}
+			}
 			account, err := deps.Store.GetAccount(alias)
 			if err != nil {
 				return err
@@ -38,8 +56,6 @@ func newUseCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-
-			ctx := commandContext(cmd)
 
 			var switchErr error
 			if hostClient, ok := deps.GitHub.(github.HostClient); ok {
@@ -143,4 +159,57 @@ func updateOriginRemote(ctx context.Context, account config.Account) error {
 	}
 	terminal.Success(deps.Stdout, "Updated origin remote: %s", nextURL)
 	return nil
+}
+
+func promptSelectAccount(ctx context.Context) (string, error) {
+	file, err := deps.Store.LoadAccounts()
+	if err != nil {
+		return "", err
+	}
+	if len(file.Accounts) == 0 {
+		terminal.Info(deps.Stdout, "No accounts configured. Run %s", terminal.Bold("gha add"))
+		return "", nil
+	}
+
+	aliases := make([]string, 0, len(file.Accounts))
+	for a := range file.Accounts {
+		aliases = append(aliases, a)
+	}
+	sort.Strings(aliases)
+
+	activeLogin, activeHostname, _ := currentGitHubIdentity(ctx)
+
+	fmt.Fprintln(deps.Stdout, terminal.Bold("Available accounts:"))
+	for i, a := range aliases {
+		acc := file.Accounts[a]
+		activeMark := ""
+		if activeLogin != "" && sameGitHubAccount(activeLogin, activeHostname, acc.Login, acc.Hostname) {
+			activeMark = " *"
+		}
+		fmt.Fprintf(deps.Stdout, "  %d) %s (%s <%s>)%s\n", i+1, a, acc.GitName, acc.Email, activeMark)
+	}
+
+	fmt.Fprintf(deps.Stdout, "Choose [1-%d]: ", len(aliases))
+	reader := bufio.NewReader(deps.Stdin)
+	line, err := reader.ReadString('\n')
+	if err != nil && len(line) == 0 {
+		return "", nil
+	}
+	input := strings.TrimSpace(line)
+	if input == "" {
+		return "", nil
+	}
+
+	if idx, convErr := strconv.Atoi(input); convErr == nil {
+		if idx >= 1 && idx <= len(aliases) {
+			return aliases[idx-1], nil
+		}
+		return "", fmt.Errorf("invalid selection %q; number out of range", input)
+	}
+
+	if _, ok := file.Accounts[input]; ok {
+		return input, nil
+	}
+
+	return "", fmt.Errorf("invalid selection %q; account not found", input)
 }

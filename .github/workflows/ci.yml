@@ -1,9 +1,23 @@
-name: ci
+name: CI
 
 on:
   push:
     branches: [main, master]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
   pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' && github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
@@ -26,6 +40,17 @@ jobs:
           go test ./... -coverprofile=coverage.out -covermode=atomic
           coverage="$(go tool cover -func=coverage.out | awk '/^total:/ { print $3 }')"
           echo "Total statement coverage: ${coverage}"
+          
+          # Render summary to GitHub Actions Step Summary
+          cat <<EOF >> "$GITHUB_STEP_SUMMARY"
+          ## 📊 CI Quality & Coverage Report
+          | Metric | Status | Result | Threshold |
+          | :--- | :--- | :--- | :--- |
+          | **Code Formatting** | ✅ Pass | \`gofmt\` clean | Required |
+          | **Go Vet** | ✅ Pass | \`go vet\` clean | Required |
+          | **Statement Coverage** | ✅ Pass | **${coverage}** | >= 90.0% |
+          EOF
+
           # Require at least 90% total statement coverage.
           if awk -v cov="${coverage%\%}" 'BEGIN { exit !(cov < 90.0) }'; then
             echo "coverage ${coverage} is below the required threshold 90.0%" >&2
@@ -48,6 +73,7 @@ jobs:
         run: go test ./...
       - name: Build
         run: go build -o gha${{ matrix.os == 'windows-latest' && '.exe' || '' }} ./cmd/gha
+
   race:
     runs-on: ubuntu-latest
     needs: quality

@@ -1,4 +1,4 @@
-name: Build and Release
+name: Release
 
 on:
   push:
@@ -10,6 +10,10 @@ on:
         description: 'Version to release (e.g., v0.4.0)'
         required: true
         type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -90,19 +94,19 @@ jobs:
           files: dist/*
           generate_release_notes: true
           body: |
-            ## 安装说明
+            ## Installation / 安装说明
 
+            Download the archive for your operating system and CPU architecture, extract it, and add `gha` (or `gha.exe` on Windows) to your `PATH`.
             下载对应平台的压缩包，解压后将 `gha`（Windows 为 `gha.exe`）添加到 PATH。
 
-            ### Windows 用户注意
+            ### Quick Verification / 快速校验
+            ```bash
+            sha256sum -c SHA256SUMS --ignore-missing
+            # macOS: shasum -a 256 -c SHA256SUMS
+            ```
 
-            Windows Defender 可能会误报该程序。这是因为 Go 静态编译和网络操作导致的误报。
-
-            你可以：
-            - 在 Windows Defender 中添加排除项
-            - 查看源代码确认安全性
-            - 从源码自行编译
-
-            我们已向 Microsoft 提交误报申请。
+            ### Windows Security Notice / Windows 用户注意
+            Windows Defender may falsely flag static Go binaries. You can safely add an exclusion or build from source via `go build ./cmd/gha`.
+            Windows Defender 可能会误报该程序。这是 Go 静态编译和网络操作导致的误报，可添加排除项或从源码自行编译。
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

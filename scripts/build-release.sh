@@ -61,7 +61,7 @@ for target in "${targets[@]}"; do
     fi
   fi
 
-  GOOS="${goos}" GOARCH="${goarch}" go build \
+  CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" go build \
     -trimpath \
     -ldflags "-s -w -X ${module}.version=${version}" \
     -o "${binary}" ./cmd/gha

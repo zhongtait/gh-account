@@ -4,8 +4,7 @@
   <a href="README.md">English</a> | <b>简体中文</b>
 </p>
 
-[![Unit tests](https://github.com/zhongtait/gh-account/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/zhongtait/gh-account/actions/workflows/ci.yml)
-[![Package artifacts](https://github.com/zhongtait/gh-account/actions/workflows/package.yml/badge.svg?branch=master)](https://github.com/zhongtait/gh-account/actions/workflows/package.yml)
+[![CI](https://github.com/zhongtait/gh-account/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/zhongtait/gh-account/actions/workflows/ci.yml)
 [![Release](https://github.com/zhongtait/gh-account/actions/workflows/release.yml/badge.svg?event=push)](https://github.com/zhongtait/gh-account/actions/workflows/release.yml)
 [![Latest release](https://img.shields.io/github/v/release/zhongtait/gh-account?sort=semver)](https://github.com/zhongtait/gh-account/releases/latest)
 
@@ -159,14 +158,11 @@ GitHub Actions 的 [CI workflow](.github/workflows/ci.yml) 会在 Pull Request �
 
 ## 版本与发布
 
-- 推送到 `main`/`master` 会生成临时 Package Artifact，不会自动创建 GitHub Release；Artifact 默认保留 14 天。
 - 推送符合 `vX.Y.Z` 格式的 tag 会构建正式 Release。例如：
-
   ```bash
   git tag v1.2.3
   git push origin v1.2.3
   ```
-
 - 也可以从 [Release workflow](.github/workflows/release.yml) 手动运行，填写版本号（例如 `v1.2.3`）；workflow 会在当前 commit 上创建 Release。
 - 正式 Release 的版本号来自 tag 或手动输入；分支推送生成的临时包使用当前 commit SHA 的前 7 位。
 - 每个正式 Release 都包含各平台压缩包和 `SHA256SUMS`，发布前会执行单元测试和 `go vet`。

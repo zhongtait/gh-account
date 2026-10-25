@@ -4,8 +4,7 @@
   <b>English</b> | <a href="README_zh.md">简体中文</a>
 </p>
 
-[![Unit tests](https://github.com/zhongtait/gh-account/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/zhongtait/gh-account/actions/workflows/ci.yml)
-[![Package artifacts](https://github.com/zhongtait/gh-account/actions/workflows/package.yml/badge.svg?branch=master)](https://github.com/zhongtait/gh-account/actions/workflows/package.yml)
+[![CI](https://github.com/zhongtait/gh-account/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/zhongtait/gh-account/actions/workflows/ci.yml)
 [![Release](https://github.com/zhongtait/gh-account/actions/workflows/release.yml/badge.svg?event=push)](https://github.com/zhongtait/gh-account/actions/workflows/release.yml)
 [![Latest release](https://img.shields.io/github/v/release/zhongtait/gh-account?sort=semver)](https://github.com/zhongtait/gh-account/releases/latest)
 
@@ -144,7 +143,6 @@ The GitHub Actions [CI workflow](.github/workflows/ci.yml) enforces 90%+ stateme
 
 ## Release & Versioning
 
-- Pushing to `master` generates package artifacts (kept for 14 days).
 - Pushing a semver tag (e.g. `v1.2.3`) triggers a formal GitHub Release:
   ```bash
   git tag v1.2.3

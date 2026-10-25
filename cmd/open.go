@@ -28,16 +28,27 @@ func newOpenCmd() *cobra.Command {
 			ctx := commandContext(cmd)
 			targetURL := ""
 
-			if len(args) == 1 && !flagRepo && !flagPR && !flagIssues && !flagActions {
-				alias := strings.TrimSpace(args[0])
-				if err := requireInitialized(); err != nil {
-					return err
+			if len(args) == 1 && !flagRepo {
+				target := strings.TrimSpace(args[0])
+				if info, parseErr := remote.Parse(target); parseErr == nil {
+					targetURL = fmt.Sprintf("https://%s/%s/%s", info.Host, info.Owner, info.Repo)
+					if flagPR {
+						targetURL += "/pulls"
+					} else if flagIssues {
+						targetURL += "/issues"
+					} else if flagActions {
+						targetURL += "/actions"
+					}
+				} else {
+					if err := requireInitialized(); err != nil {
+						return err
+					}
+					account, err := deps.Store.GetAccount(target)
+					if err != nil {
+						return err
+					}
+					targetURL = fmt.Sprintf("https://%s/%s", account.Hostname, account.Login)
 				}
-				account, err := deps.Store.GetAccount(alias)
-				if err != nil {
-					return err
-				}
-				targetURL = fmt.Sprintf("https://%s/%s", account.Hostname, account.Login)
 			} else {
 				isRepo, _ := deps.Git.IsRepo(ctx)
 				if isRepo {

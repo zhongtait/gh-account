@@ -441,9 +441,21 @@ func (s *Store) GetAccount(alias string) (Account, error) {
 	}
 	account, ok := file.Accounts[alias]
 	if !ok {
+		suggestion := utils.SuggestCandidate(alias, accountAliases(file.Accounts))
+		if suggestion != "" {
+			return Account{}, fmt.Errorf("account %q not found; did you mean %q?", alias, suggestion)
+		}
 		return Account{}, fmt.Errorf("account %q not found", alias)
 	}
 	return account, nil
+}
+
+func accountAliases(accounts map[string]Account) []string {
+	aliases := make([]string, 0, len(accounts))
+	for k := range accounts {
+		aliases = append(aliases, k)
+	}
+	return aliases
 }
 
 // UpsertAccount creates or updates an account alias.
@@ -483,6 +495,10 @@ func (s *Store) RemoveAccount(alias string) error {
 			return err
 		}
 		if _, ok := file.Accounts[alias]; !ok {
+			suggestion := utils.SuggestCandidate(alias, accountAliases(file.Accounts))
+			if suggestion != "" {
+				return fmt.Errorf("account %q not found; did you mean %q?", alias, suggestion)
+			}
 			return fmt.Errorf("account %q not found", alias)
 		}
 		delete(file.Accounts, alias)

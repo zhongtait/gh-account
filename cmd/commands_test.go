@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/zhongtait/gh-account/internal/config"
 	"github.com/zhongtait/gh-account/internal/git"
+	"github.com/zhongtait/gh-account/internal/github"
 	"github.com/zhongtait/gh-account/internal/remote"
 )
 
@@ -79,10 +80,11 @@ func (g *commandGit) SetCredentialHelper(context.Context, git.Scope, string, str
 }
 
 type commandGitHub struct {
-	login, host                                                        string
-	hasCredential                                                      bool
-	clientID                                                           string
-	loginErr, switchErr, oauthErr, logoutErr, credentialErr, statusErr error
+	login, host                                                                    string
+	hasCredential                                                                  bool
+	clientID                                                                       string
+	loginErr, switchErr, oauthErr, logoutErr, credentialErr, statusErr, profileErr error
+	profile                                                                        github.UserProfile
 }
 
 type loginOnlyGitHub struct {
@@ -131,6 +133,24 @@ func (g *commandGitHub) HasCredential(context.Context, string, string) (bool, er
 }
 func (g *commandGitHub) ConfiguredClientID() string { return g.clientID }
 func (g *commandGitHub) SetClientID(id string)      { g.clientID = id }
+func (g *commandGitHub) CurrentProfile(context.Context) (github.UserProfile, error) {
+	if g.profileErr != nil {
+		return github.UserProfile{}, g.profileErr
+	}
+	return g.profile, nil
+}
+func (g *commandGitHub) LoginWithToken(_ context.Context, hostname, token string) (github.UserProfile, error) {
+	if g.oauthErr != nil {
+		return github.UserProfile{}, g.oauthErr
+	}
+	return github.UserProfile{Login: "tokenuser", Name: "Token User", Email: "tokenuser@example.com"}, nil
+}
+func (g *commandGitHub) InspectToken(_ context.Context, hostname, token string) (github.TokenInfo, error) {
+	if g.oauthErr != nil {
+		return github.TokenInfo{}, g.oauthErr
+	}
+	return github.TokenInfo{Login: g.login, Scopes: []string{"repo", "workflow", "read:user", "user:email"}}, nil
+}
 
 func commandSetup(t *testing.T) (*config.Store, *commandGit, *commandGitHub, *bytes.Buffer) {
 	t.Helper()
@@ -243,9 +263,34 @@ func TestCommandAddLoginAutoAndErrors(t *testing.T) {
 	if err := runCommand(t, newUseCmd(), "missing"); err == nil {
 		t.Fatal("missing use accepted")
 	}
+	// Test fuzzy suggestion
+	if err := runCommand(t, newUseCmd(), "alce"); err == nil || !strings.Contains(err.Error(), "did you mean \"alice\"") {
+		t.Fatalf("expected did you mean suggestion, got: %v", err)
+	}
 	if err := runCommand(t, newRemoveCmd(), "missing"); err == nil {
 		t.Fatal("missing remove accepted")
 	}
+
+	// Test login with direct token
+	if err := runCommand(t, newLoginCmd(), "tokenacc", "--token", "ghp_direct_123"); err != nil {
+		t.Fatalf("login with token failed: %v", err)
+	}
+	tokenAcc, err := store.GetAccount("tokenacc")
+	if err != nil || tokenAcc.Login != "tokenuser" {
+		t.Fatalf("unexpected token account: %+v, %v", tokenAcc, err)
+	}
+
+	// Test login with auto-detected email and profile
+	gh.profile = github.UserProfile{Login: "auto", Name: "Auto User", Email: "auto@example.com"}
+	gh.login = "auto"
+	if err := runCommand(t, newLoginCmd(), "autoacc"); err != nil {
+		t.Fatalf("login with detected profile failed: %v", err)
+	}
+	autoAcc, err := store.GetAccount("autoacc")
+	if err != nil || autoAcc.Email != "auto@example.com" || autoAcc.GitName != "Auto User" {
+		t.Fatalf("unexpected auto account: %+v, %v", autoAcc, err)
+	}
+	gh.profile = github.UserProfile{}
 }
 
 func TestRootHelpersAndCompletion(t *testing.T) {

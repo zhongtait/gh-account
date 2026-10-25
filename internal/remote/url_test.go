@@ -20,6 +20,24 @@ func TestParseAndRewriteHTTPS(t *testing.T) {
 	}
 }
 
+func TestParseShorthandOwnerRepo(t *testing.T) {
+	info, err := Parse("cli/cli")
+	if err != nil {
+		t.Fatalf("Parse shorthand: %v", err)
+	}
+	if info.Owner != "cli" || info.Repo != "cli" || info.Protocol != "https" || info.Host != "github.com" {
+		t.Fatalf("unexpected info for shorthand: %+v", info)
+	}
+
+	withGit, err := Parse("cli/cli.git")
+	if err != nil {
+		t.Fatalf("Parse shorthand with .git: %v", err)
+	}
+	if withGit.Owner != "cli" || withGit.Repo != "cli" || withGit.Protocol != "https" || withGit.Host != "github.com" {
+		t.Fatalf("unexpected info for shorthand with .git: %+v", withGit)
+	}
+}
+
 func TestParseSSH(t *testing.T) {
 	info, err := Parse("git@github.com:acme/app.git")
 	if err != nil {

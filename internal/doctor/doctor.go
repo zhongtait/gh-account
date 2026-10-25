@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 
 	"github.com/zhongtait/gh-account/internal/config"
+	"github.com/zhongtait/gh-account/internal/ghman"
 	"github.com/zhongtait/gh-account/internal/git"
 	"github.com/zhongtait/gh-account/internal/github"
 	"github.com/zhongtait/gh-account/internal/utils"
@@ -35,15 +37,36 @@ func (r Report) Healthy() bool {
 
 // Runner performs environment diagnostics.
 type Runner struct {
-	Store  *config.Store
-	Git    git.Client
-	GitHub github.Client
+	Store    *config.Store
+	Git      git.Client
+	GitHub   github.Client
+	LookPath func(file string) (string, error)
 }
 
 // Run executes diagnostics.
 func (r Runner) Run(ctx context.Context) Report {
 	var checks []Check
 	checks = append(checks, Check{Name: "git", OK: true, Message: "native Git support available"})
+
+	lookPath := r.LookPath
+	if lookPath == nil {
+		lookPath = exec.LookPath
+	}
+	configDir := ""
+	if r.Store != nil {
+		configDir = r.Store.Dir
+	}
+	m := ghman.NewManager(configDir, nil, nil)
+	m.LookPath = lookPath
+	if ghPath, isManaged, err := m.FindGH(); err == nil {
+		source := "system PATH"
+		if isManaged {
+			source = "gha managed"
+		}
+		checks = append(checks, Check{Name: "gh", OK: true, Message: fmt.Sprintf("GitHub CLI available: %s (%s)", ghPath, source)})
+	} else {
+		checks = append(checks, Check{Name: "gh", OK: true, Message: "GitHub CLI will be automatically downloaded on first use"})
+	}
 
 	if r.Store == nil {
 		checks = append(checks, Check{Name: "config", OK: false, Message: "config store is not configured"})

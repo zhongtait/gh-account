@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
@@ -36,14 +37,18 @@ func newListCmd() *cobra.Command {
 			sort.Strings(aliases)
 
 			w := tabwriter.NewWriter(deps.Stdout, 0, 4, 2, ' ', 0)
-			fmt.Fprintln(w, "ALIAS\tLOGIN\tEMAIL\tPROTOCOL\tACTIVE")
+			fmt.Fprintln(w, "ALIAS\tLOGIN\tEMAIL\tPROTOCOL\tAUTH\tACTIVE")
 			for _, alias := range aliases {
 				account := file.Accounts[alias]
 				active := ""
 				if activeLogin != "" && sameGitHubAccount(activeLogin, activeHostname, account.Login, account.Hostname) {
 					active = "*"
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", alias, account.Login, account.Email, account.Protocol, active)
+				auth := "no token"
+				if cred, found, err := deps.Store.GetCredential(account.Hostname, account.Login); err == nil && found && strings.TrimSpace(cred.AccessToken) != "" {
+					auth = "logged in"
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", alias, account.Login, account.Email, account.Protocol, auth, active)
 			}
 			return w.Flush()
 		},

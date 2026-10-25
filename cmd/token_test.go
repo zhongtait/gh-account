@@ -109,6 +109,24 @@ func TestTokenCmdErrorsAndOutputs(t *testing.T) {
 	if err := copyCmd.RunE(copyCmd, []string{"alice"}); err == nil || !strings.Contains(err.Error(), "clipboard failure") {
 		t.Fatalf("expected clipboard failure error, got: %v", err)
 	}
+
+	// 9. Token check & scopes
+	out.Reset()
+	checkCmd := newTokenCmd()
+	checkCmd.Flags().Set("check", "true")
+	if err := checkCmd.RunE(checkCmd, []string{"alice"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Token is valid") || !strings.Contains(out.String(), "workflow scope present") {
+		t.Fatalf("unexpected token check output: %q", out.String())
+	}
+
+	// 10. Token check inspector error
+	gh.oauthErr = errors.New("token revoked")
+	if err := checkCmd.RunE(checkCmd, []string{"alice"}); err == nil || !strings.Contains(err.Error(), "token revoked") {
+		t.Fatalf("expected token revoked error, got: %v", err)
+	}
+	gh.oauthErr = nil
 }
 
 func TestTokenCmdStoreFailures(t *testing.T) {

@@ -96,4 +96,25 @@ func TestCloneCommandAcceptsAutoAndUseSyntax(t *testing.T) {
 	if err := cmd.Args(cmd, []string{"https://github.com/owner/repo.git", "use", "personal"}); err != nil {
 		t.Fatalf("use syntax rejected: %v", err)
 	}
+	if err := cmd.Args(cmd, []string{"owner/repo"}); err != nil {
+		t.Fatalf("shorthand repo syntax rejected: %v", err)
+	}
+	if err := cmd.Flags().Set("dir", "my-dir"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Flags().Set("account", "personal"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Args(cmd, []string{}); err == nil {
+		t.Fatal("expected empty args to be rejected")
+	}
+	if err := cmd.Args(cmd, []string{"owner/repo", "bad"}); err == nil {
+		t.Fatal("expected invalid mode to be rejected")
+	}
+	if err := cmd.Args(cmd, []string{"owner/repo", "bad", "x"}); err == nil {
+		t.Fatal("expected invalid selector to be rejected")
+	}
+	if err := cmd.Args(cmd, []string{"owner/repo", "a", "b", "c"}); err == nil {
+		t.Fatal("expected excess arguments to be rejected")
+	}
 }

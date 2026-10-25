@@ -29,6 +29,7 @@ var (
 	cloneLogin          = runLoginForClone
 	cloneAccountByAlias = func(store *config.Store, alias string) (config.Account, error) { return store.GetAccount(alias) }
 	cloneLocalGit       = func(destination string) cloneConfigurator { return git.NewNativeClient(destination) }
+	cloneCustomDest     string
 )
 
 type cloneConfigurator interface {
@@ -37,7 +38,10 @@ type cloneConfigurator interface {
 }
 
 func newCloneCmd() *cobra.Command {
-	return &cobra.Command{
+	var flagAccount string
+	var flagDir string
+
+	cmd := &cobra.Command{
 		Use:   "clone <repository> [auto|use <account>]",
 		Short: "Clone a GitHub repository with a selected account",
 		Args: func(cmd *cobra.Command, args []string) error {
@@ -74,12 +78,31 @@ func newCloneCmd() *cobra.Command {
 			if explicit {
 				alias = strings.TrimSpace(args[2])
 			}
+			if flagAccount != "" {
+				alias = strings.TrimSpace(flagAccount)
+				explicit = true
+			}
+			if flagDir != "" {
+				cloneCustomDest = strings.TrimSpace(flagDir)
+				defer func() { cloneCustomDest = "" }()
+			}
+
 			alias, account, err := cloneSelectAccount(ctx, cmd, info, alias, explicit)
 			if err != nil {
 				return err
 			}
 
-			cloneErr := cloneRun(ctx, args[0], info, account)
+			repoURL := args[0]
+			if !strings.Contains(args[0], "://") && !strings.Contains(args[0], ":") {
+				if account.Protocol != "" {
+					info.Protocol = account.Protocol
+				}
+				if built, err := remote.Build(info); err == nil {
+					repoURL = built
+				}
+			}
+
+			cloneErr := cloneRun(ctx, repoURL, info, account)
 			if cloneErr != nil && !explicit && isHTTPRemote(info) && isCloneAuthFailure(cloneErr) {
 				terminal.Warn(deps.Stdout, "Account %s cannot access this repository; starting GitHub login", alias)
 				loginAlias, loginErr := cloneLogin(cmd, info)
@@ -91,7 +114,15 @@ func newCloneCmd() *cobra.Command {
 					return err
 				}
 				alias = loginAlias
-				cloneErr = cloneRun(ctx, args[0], info, account)
+				if !strings.Contains(args[0], "://") && !strings.Contains(args[0], ":") {
+					if account.Protocol != "" {
+						info.Protocol = account.Protocol
+					}
+					if built, err := remote.Build(info); err == nil {
+						repoURL = built
+					}
+				}
+				cloneErr = cloneRun(ctx, repoURL, info, account)
 			}
 			if cloneErr != nil {
 				return cloneErr
@@ -116,6 +147,10 @@ func newCloneCmd() *cobra.Command {
 			return nil
 		},
 	}
+
+	cmd.Flags().StringVarP(&flagAccount, "account", "a", "", "specify account alias to clone with")
+	cmd.Flags().StringVarP(&flagDir, "dir", "d", "", "directory to clone repository into")
+	return cmd
 }
 
 func selectCloneAccount(ctx context.Context, cmd *cobra.Command, info remote.Info, preferredAlias string, explicit bool) (string, config.Account, error) {
@@ -130,8 +165,6 @@ func selectCloneAccount(ctx context.Context, cmd *cobra.Command, info remote.Inf
 			return "", config.Account{}, fmt.Errorf("account %q not found", preferredAlias)
 		}
 		if !sameGitHubAccount(info.Owner, info.Host, account.Login, account.Hostname) && strings.EqualFold(info.Protocol, "https") {
-			// The repository owner may be an organization or another user, so a
-			// mismatch is allowed when the selected account has a credential.
 			checker, ok := deps.GitHub.(github.CredentialChecker)
 			if !ok {
 				return "", config.Account{}, errors.New("GitHub credential checking is unavailable")
@@ -152,8 +185,6 @@ func selectCloneAccount(ctx context.Context, cmd *cobra.Command, info remote.Inf
 		return preferredAlias, account, nil
 	}
 
-	// Auto prefers an account whose login is the repository owner, then the
-	// active account, then the only credential available for this host.
 	var candidates []struct {
 		alias   string
 		account config.Account
@@ -192,8 +223,6 @@ func selectCloneAccount(ctx context.Context, cmd *cobra.Command, info remote.Inf
 		return "", config.Account{}, fmt.Errorf("multiple logged-in accounts match host %s; use: gha clone %s use <account>", info.Host, info.Raw)
 	}
 
-	// No usable local credential: use the existing login flow and retry account
-	// selection. This is the auto equivalent of running gha login.
 	loginAlias, loginErr := cloneLogin(cmd, info)
 	if loginErr != nil {
 		return "", config.Account{}, loginErr
@@ -306,6 +335,9 @@ func runGitClone(ctx context.Context, repository, helper string, stdout, stderr 
 		args = append(args, "-c", "credential.helper=", "-c", "credential.helper="+helper)
 	}
 	args = append(args, "clone", repository)
+	if cloneCustomDest != "" {
+		args = append(args, cloneCustomDest)
+	}
 	command := exec.CommandContext(ctx, "git", args...)
 	command.Stdout = stdout
 	command.Stderr = stderr
@@ -313,10 +345,10 @@ func runGitClone(ctx context.Context, repository, helper string, stdout, stderr 
 }
 
 func cloneDestination(repository string, info remote.Info) (string, error) {
-	// git clone defaults to the repository basename when no destination is
-	// supplied. Resolve it here so local configuration is written to the same
-	// directory without changing git's normal clone behavior.
 	destination := info.Repo
+	if cloneCustomDest != "" {
+		destination = cloneCustomDest
+	}
 	if destination == "" {
 		return "", errors.New("unable to determine clone destination")
 	}

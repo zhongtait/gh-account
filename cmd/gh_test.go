@@ -5,15 +5,18 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/zhongtait/gh-account/internal/config"
+	"github.com/zhongtait/gh-account/internal/ghman"
 	"github.com/zhongtait/gh-account/internal/utils"
 )
 
 func TestRunSystemGH(t *testing.T) {
-	_ = runSystemGH(context.Background(), strings.NewReader(""), io.Discard, io.Discard, []string{"FOO=BAR"}, "--version")
+	_ = runSystemGH(context.Background(), "gh", strings.NewReader(""), io.Discard, io.Discard, []string{"FOO=BAR"}, "--version")
+	_ = runSystemGH(context.Background(), "", strings.NewReader(""), io.Discard, io.Discard, nil, "--version")
 }
 
 func TestGHCmdHelpAndEmptyArgs(t *testing.T) {
@@ -21,9 +24,11 @@ func TestGHCmdHelpAndEmptyArgs(t *testing.T) {
 
 	oldLookPath := ghLookPath
 	oldExec := ghExec
+	oldEnsure := ghEnsure
 	defer func() {
 		ghLookPath = oldLookPath
 		ghExec = oldExec
+		ghEnsure = oldEnsure
 	}()
 
 	ghLookPath = func(file string) (string, error) {
@@ -31,9 +36,11 @@ func TestGHCmdHelpAndEmptyArgs(t *testing.T) {
 	}
 
 	called := false
+	var capturedBin string
 	var capturedArgs []string
-	ghExec = func(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, extraEnv []string, args ...string) error {
+	ghExec = func(ctx context.Context, binary string, stdin io.Reader, stdout, stderr io.Writer, extraEnv []string, args ...string) error {
 		called = true
+		capturedBin = binary
 		capturedArgs = args
 		return nil
 	}
@@ -44,17 +51,18 @@ func TestGHCmdHelpAndEmptyArgs(t *testing.T) {
 	if err := ghCmd.RunE(ghCmd, nil); err != nil {
 		t.Fatal(err)
 	}
-	if !called || len(capturedArgs) != 0 {
-		t.Fatalf("expected 0 args, got called=%v args=%v", called, capturedArgs)
+	if !called || len(capturedArgs) != 0 || capturedBin != "/usr/bin/gh" {
+		t.Fatalf("expected 0 args, got called=%v args=%v bin=%s", called, capturedArgs, capturedBin)
 	}
 
-	// 2. Empty args with ghLookPath error
-	ghLookPath = func(file string) (string, error) {
-		return "", errors.New("not found")
+	// 2. ghEnsure error
+	ghEnsure = func(ctx context.Context) (string, error) {
+		return "", errors.New("download failed")
 	}
-	if err := ghCmd.RunE(ghCmd, nil); err == nil || !strings.Contains(err.Error(), "GitHub CLI (gh) not found") {
-		t.Fatalf("expected gh not found error, got: %v", err)
+	if err := ghCmd.RunE(ghCmd, nil); err == nil || !strings.Contains(err.Error(), "ensure GitHub CLI (gh): download failed") {
+		t.Fatalf("expected download failed error, got: %v", err)
 	}
+	ghEnsure = ensureGH
 
 	// 3. Help flags
 	if err := ghCmd.RunE(ghCmd, []string{"--help"}); err != nil {
@@ -65,8 +73,8 @@ func TestGHCmdHelpAndEmptyArgs(t *testing.T) {
 	}
 }
 
-func TestGHCmdAccountAndExecution(t *testing.T) {
-	store, _, gh, _ := commandSetup(t)
+func TestGHCmdInstallAndPath(t *testing.T) {
+	store, _, _, out := commandSetup(t)
 
 	oldLookPath := ghLookPath
 	oldExec := ghExec
@@ -75,13 +83,74 @@ func TestGHCmdAccountAndExecution(t *testing.T) {
 		ghExec = oldExec
 	}()
 
+	ghCmd := newGHCmd()
+
+	// 1. Path when system gh available
+	ghLookPath = func(file string) (string, error) {
+		return "/usr/local/bin/gh", nil
+	}
+	out.Reset()
+	if err := ghCmd.RunE(ghCmd, []string{"path"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "/usr/local/bin/gh (system)") {
+		t.Fatalf("unexpected path output: %s", out.String())
+	}
+
+	// 2. Path when managed gh available
+	ghLookPath = func(file string) (string, error) {
+		return "", errors.New("not found")
+	}
+	mgr := ghman.NewManager(store.Dir, io.Discard, io.Discard)
+	managedPath := mgr.ManagedPath()
+	_ = os.MkdirAll(filepath.Dir(managedPath), 0o755)
+	_ = os.WriteFile(managedPath, []byte("echo"), 0o755)
+	out.Reset()
+	if err := ghCmd.RunE(ghCmd, []string{"path"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "(managed)") {
+		t.Fatalf("unexpected path output: %s", out.String())
+	}
+
+	// 3. Path when neither available
+	_ = os.Remove(managedPath)
+	if err := ghCmd.RunE(ghCmd, []string{"path"}); err == nil || !strings.Contains(err.Error(), "GitHub CLI (gh) not found") {
+		t.Fatalf("expected not found error, got: %v", err)
+	}
+
+	// 4. Install command
+	oldNewManager := ghNewManager
+	defer func() { ghNewManager = oldNewManager }()
+	ghNewManager = func(configDir string, stdout, stderr io.Writer) *ghman.Manager {
+		m := ghman.NewManager(configDir, stdout, stderr)
+		m.BaseURL = "http://127.0.0.1:1" // Will fail download gracefully
+		return m
+	}
+	if err := ghCmd.RunE(ghCmd, []string{"install"}); err == nil {
+		t.Fatal("expected install network error")
+	}
+}
+
+func TestGHCmdAccountAndExecution(t *testing.T) {
+	store, _, gh, _ := commandSetup(t)
+
+	oldLookPath := ghLookPath
+	oldExec := ghExec
+	oldEnsure := ghEnsure
+	defer func() {
+		ghLookPath = oldLookPath
+		ghExec = oldExec
+		ghEnsure = oldEnsure
+	}()
+
 	ghLookPath = func(file string) (string, error) {
 		return "/usr/bin/gh", nil
 	}
 
 	var capturedEnv []string
 	var capturedArgs []string
-	ghExec = func(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, extraEnv []string, args ...string) error {
+	ghExec = func(ctx context.Context, binary string, stdin io.Reader, stdout, stderr io.Writer, extraEnv []string, args ...string) error {
 		capturedEnv = extraEnv
 		capturedArgs = args
 		return nil
@@ -95,15 +164,13 @@ func TestGHCmdAccountAndExecution(t *testing.T) {
 	}
 
 	// 2. gh not found with args
-	ghLookPath = func(file string) (string, error) {
+	ghEnsure = func(ctx context.Context) (string, error) {
 		return "", errors.New("not found")
 	}
-	if err := ghCmd.RunE(ghCmd, []string{"pr", "list"}); err == nil || !strings.Contains(err.Error(), "GitHub CLI (gh) not found") {
+	if err := ghCmd.RunE(ghCmd, []string{"pr", "list"}); err == nil || !strings.Contains(err.Error(), "ensure GitHub CLI (gh): not found") {
 		t.Fatalf("expected not found error, got: %v", err)
 	}
-	ghLookPath = func(file string) (string, error) {
-		return "/usr/bin/gh", nil
-	}
+	ghEnsure = ensureGH
 
 	// 3. Uninitialized store with account flag
 	emptyStore := config.NewStore(t.TempDir())

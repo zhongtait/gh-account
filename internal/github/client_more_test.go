@@ -492,3 +492,71 @@ func TestOpenBrowserPlatformsAndFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestProfileAndTokenInspection(t *testing.T) {
+	ctx := context.Background()
+	store := config.NewStore(t.TempDir())
+	_ = store.EnsureInitialized()
+	c := NewOAuthClient(store, io.Discard, "id")
+
+	// 1. CurrentProfile with no active account
+	if _, err := c.CurrentProfile(ctx); err == nil || !strings.Contains(err.Error(), "no active GitHub account") {
+		t.Fatalf("expected no active account error, got: %v", err)
+	}
+
+	// 2. LoginWithToken success (with /user returning email)
+	c.HTTP = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(req.URL.Path, "/user") {
+			return response(200, io.NopCloser(strings.NewReader(`{"login":"octocat","name":"The Octocat","email":"octo@example.com"}`))), nil
+		}
+		return response(404, io.NopCloser(strings.NewReader(`{}`))), nil
+	})}
+
+	profile, err := c.LoginWithToken(ctx, "github.com", "ghp_mock_token_123")
+	if err != nil {
+		t.Fatalf("LoginWithToken: %v", err)
+	}
+	if profile.Login != "octocat" || profile.Name != "The Octocat" || profile.Email != "octo@example.com" {
+		t.Fatalf("unexpected profile: %+v", profile)
+	}
+
+	// 3. CurrentProfile success
+	currProf, err := c.CurrentProfile(ctx)
+	if err != nil || currProf != profile {
+		t.Fatalf("CurrentProfile: %+v, %v", currProf, err)
+	}
+
+	// 4. CurrentProfile when /user email is empty but /user/emails has primary
+	c.HTTP = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(req.URL.Path, "/user") {
+			return response(200, io.NopCloser(strings.NewReader(`{"login":"octocat","name":"The Octocat","email":""}`))), nil
+		}
+		if strings.HasSuffix(req.URL.Path, "/user/emails") {
+			return response(200, io.NopCloser(strings.NewReader(`[{"email":"backup@example.com","primary":false,"verified":true},{"email":"primary@example.com","primary":true,"verified":true}]`))), nil
+		}
+		return response(404, io.NopCloser(strings.NewReader(`{}`))), nil
+	})}
+	currProf, err = c.CurrentProfile(ctx)
+	if err != nil || currProf.Email != "primary@example.com" {
+		t.Fatalf("expected primary@example.com, got: %q, %v", currProf.Email, err)
+	}
+
+	// 5. InspectToken
+	c.HTTP = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		res := response(200, io.NopCloser(strings.NewReader(`{"login":"octocat"}`)))
+		res.Header.Set("X-OAuth-Scopes", "repo, workflow, user:email")
+		return res, nil
+	})}
+	info, err := c.InspectToken(ctx, "github.com", "ghp_mock_token_123")
+	if err != nil {
+		t.Fatalf("InspectToken: %v", err)
+	}
+	if info.Login != "octocat" || len(info.Scopes) != 3 || info.Scopes[1] != "workflow" {
+		t.Fatalf("unexpected token info: %+v", info)
+	}
+
+	// 6. LoginWithToken validation error
+	if _, err := c.LoginWithToken(ctx, "github.com", "   "); err == nil {
+		t.Fatal("expected empty token error")
+	}
+}

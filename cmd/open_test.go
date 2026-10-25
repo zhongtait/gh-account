@@ -211,4 +211,24 @@ func TestOpenCmdRepoAndActiveAccount(t *testing.T) {
 	if len(values) == 0 {
 		t.Fatal("expected alias completions")
 	}
+
+	// 7. Shorthand repository owner/repo and flags
+	openedURL = ""
+	cmd = newOpenCmd()
+	if err := cmd.RunE(cmd, []string{"cli/cli"}); err != nil {
+		t.Fatal(err)
+	}
+	if openedURL != "https://github.com/cli/cli" {
+		t.Fatalf("expected https://github.com/cli/cli, got %s", openedURL)
+	}
+
+	openedURL = ""
+	cmd = newOpenCmd()
+	cmd.Flags().Set("issues", "true")
+	if err := cmd.RunE(cmd, []string{"cli/cli"}); err != nil {
+		t.Fatal(err)
+	}
+	if openedURL != "https://github.com/cli/cli/issues" {
+		t.Fatalf("expected https://github.com/cli/cli/issues, got %s", openedURL)
+	}
 }

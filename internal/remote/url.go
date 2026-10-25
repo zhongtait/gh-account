@@ -83,6 +83,13 @@ func Parse(raw string) (Info, error) {
 		}
 	}
 
+	if !strings.Contains(raw, "://") && !strings.Contains(raw, ":") {
+		path := trimGitSuffix(strings.Trim(raw, "/"))
+		if owner, repo, err := splitOwnerRepo(path); err == nil {
+			return Info{Raw: raw, Protocol: "https", Host: "github.com", Owner: owner, Repo: repo}, nil
+		}
+	}
+
 	return Info{}, fmt.Errorf("unsupported remote url: %s", raw)
 }
 

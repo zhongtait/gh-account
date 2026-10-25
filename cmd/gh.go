@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,15 +10,44 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/zhongtait/gh-account/internal/config"
+	"github.com/zhongtait/gh-account/internal/ghman"
+	"github.com/zhongtait/gh-account/internal/terminal"
 )
 
 var (
-	ghLookPath = exec.LookPath
-	ghExec     = runSystemGH
+	ghLookPath   = exec.LookPath
+	ghExec       = runSystemGH
+	ghEnsure     = ensureGH
+	ghNewManager = func(configDir string, stdout, stderr io.Writer) *ghman.Manager {
+		return ghman.NewManager(configDir, stdout, stderr)
+	}
 )
 
-func runSystemGH(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, extraEnv []string, args ...string) error {
-	command := exec.CommandContext(ctx, "gh", args...)
+func ghManager() *ghman.Manager {
+	configDir := ""
+	if deps.Store != nil {
+		configDir = deps.Store.Dir
+	}
+	if configDir == "" {
+		if dir, err := commandConfigDir(); err == nil {
+			configDir = dir
+		}
+	}
+	m := ghNewManager(configDir, deps.Stdout, deps.Stderr)
+	m.LookPath = ghLookPath
+	return m
+}
+
+func ensureGH(ctx context.Context) (string, error) {
+	m := ghManager()
+	return m.EnsureGH(ctx)
+}
+
+func runSystemGH(ctx context.Context, binary string, stdin io.Reader, stdout, stderr io.Writer, extraEnv []string, args ...string) error {
+	if binary == "" {
+		binary = "gh"
+	}
+	command := exec.CommandContext(ctx, binary, args...)
 	command.Stdin = stdin
 	command.Stdout = stdout
 	command.Stderr = stderr
@@ -39,12 +67,6 @@ func newGHCmd() *cobra.Command {
 		SilenceUsage:       true,
 		SilenceErrors:      true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) == 0 {
-				if _, err := ghLookPath("gh"); err != nil {
-					return errors.New("GitHub CLI (gh) not found in PATH; install it from https://cli.github.com")
-				}
-				return ghExec(commandContext(cmd), deps.Stdin, deps.Stdout, deps.Stderr, nil)
-			}
 			if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
 				return cmd.Help()
 			}
@@ -54,8 +76,38 @@ func newGHCmd() *cobra.Command {
 				return err
 			}
 
-			if _, err := ghLookPath("gh"); err != nil {
-				return errors.New("GitHub CLI (gh) not found in PATH; install it from https://cli.github.com")
+			if len(ghArgs) > 0 {
+				switch ghArgs[0] {
+				case "install":
+					m := ghManager()
+					installedPath, err := m.Install(commandContext(cmd))
+					if err != nil {
+						return err
+					}
+					terminal.Success(deps.Stdout, "GitHub CLI installed to %s", installedPath)
+					return nil
+				case "path":
+					m := ghManager()
+					path, isManaged, err := m.FindGH()
+					if err != nil {
+						return err
+					}
+					source := "system"
+					if isManaged {
+						source = "managed"
+					}
+					fmt.Fprintf(deps.Stdout, "%s (%s)\n", path, source)
+					return nil
+				}
+			}
+
+			ghBin, err := ghEnsure(commandContext(cmd))
+			if err != nil {
+				return fmt.Errorf("ensure GitHub CLI (gh): %w", err)
+			}
+
+			if len(ghArgs) == 0 {
+				return ghExec(commandContext(cmd), ghBin, deps.Stdin, deps.Stdout, deps.Stderr, nil)
 			}
 
 			var extraEnv []string
@@ -105,7 +157,7 @@ func newGHCmd() *cobra.Command {
 				return err
 			}
 
-			return ghExec(commandContext(cmd), deps.Stdin, deps.Stdout, deps.Stderr, extraEnv, ghArgs...)
+			return ghExec(commandContext(cmd), ghBin, deps.Stdin, deps.Stdout, deps.Stderr, extraEnv, ghArgs...)
 		},
 	}
 

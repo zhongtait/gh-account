@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/zhongtait/gh-account/internal/clipboard"
 	"github.com/zhongtait/gh-account/internal/config"
+	"github.com/zhongtait/gh-account/internal/github"
 	"github.com/zhongtait/gh-account/internal/terminal"
 )
 
@@ -14,6 +15,7 @@ var clipboardCopy = clipboard.Copy
 
 func newTokenCmd() *cobra.Command {
 	var flagCopy bool
+	var flagCheck bool
 
 	cmd := &cobra.Command{
 		Use:   "token [alias]",
@@ -65,6 +67,37 @@ func newTokenCmd() *cobra.Command {
 
 			token := cred.AccessToken
 
+			if flagCheck {
+				if inspector, ok := deps.GitHub.(github.TokenInspector); ok {
+					info, err := inspector.InspectToken(commandContext(cmd), targetAccount.Hostname, token)
+					if err != nil {
+						terminal.Error(deps.Stdout, "Token check failed: %v", err)
+						return err
+					}
+					terminal.Success(deps.Stdout, "Token is valid for %s (%s)", terminal.Bold(info.Login), targetAccount.Hostname)
+					if len(info.Scopes) > 0 {
+						terminal.Info(deps.Stdout, "Scopes: %s", strings.Join(info.Scopes, ", "))
+						hasWorkflow := false
+						for _, s := range info.Scopes {
+							if s == "workflow" {
+								hasWorkflow = true
+								break
+							}
+						}
+						if hasWorkflow {
+							terminal.Success(deps.Stdout, "✓ workflow scope present (Actions push permitted)")
+						} else {
+							terminal.Warn(deps.Stdout, "⚠ workflow scope missing (pushing .github/workflows/*.yml may fail)")
+						}
+					} else {
+						terminal.Info(deps.Stdout, "Scopes: (none or fine-grained PAT)")
+					}
+					return nil
+				}
+				terminal.Warn(deps.Stdout, "Token inspection is not supported by current GitHub client")
+				return nil
+			}
+
 			if flagCopy {
 				if err := clipboardCopy(token); err != nil {
 					return fmt.Errorf("copy to clipboard: %w", err)
@@ -79,5 +112,7 @@ func newTokenCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVarP(&flagCopy, "copy", "c", false, "copy token to clipboard instead of printing")
+	cmd.Flags().BoolVar(&flagCheck, "check", false, "check token validity and scopes via GitHub API")
+	cmd.Flags().BoolVar(&flagCheck, "scopes", false, "alias for --check")
 	return cmd
 }

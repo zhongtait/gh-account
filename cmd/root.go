@@ -89,7 +89,9 @@ func ExecuteContextArgs(ctx context.Context, args []string) error {
 
 func isKnownGHCommand(name string) bool {
 	switch name {
-	case "pr", "issue", "issues", "api", "run", "gist", "release", "search", "workflow", "codespace":
+	case "pr", "issue", "issues", "api", "run", "gist", "release", "search", "workflow", "codespace",
+		"repo", "browse", "cache", "secret", "variable", "label", "ruleset", "discussion",
+		"project", "attestation", "org", "co":
 		return true
 	default:
 		return false

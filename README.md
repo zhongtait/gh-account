@@ -11,15 +11,22 @@
 
 - 管理多个 GitHub 账号配置
 - 切换本地 OAuth 登录账号并同步 Git `user.name` / `user.email`
+- **自动获取邮箱与真实姓名**：登录（OAuth 或 Token）成功后自动通过 GitHub API 读取主邮箱（含隐私邮箱识别）与个人昵称，**无需手动输入**，彻底杜绝提交邮箱输错导致的历史污染
+- **支持 Token (PAT) 直接登录**：支持通过 `--token` 或 `--with-token`（从标准输入读取）直接导入 Personal Access Token，无需浏览器 Device Flow，非常适合已有 Token 或自动化脚本场景
+- **Token 权限与状态自检**：`gha token --check`（或 `--scopes`）实时联网校验 Token 有效性与完整作用域（显式提示是否具备关键的 `workflow` 权限）
+- **智能纠错建议**：当输错账号别名时（如 `gha use persnal`），基于编辑距离自动提示 `account "persnal" not found; did you mean "personal"?`
+- **GitHub CLI (gh) 自动托管与透明透传**：系统未安装 `gh` 时**自动按需下载官方二进制**至 `~/.config/gha/bin/gh`，免去任何手动配置；全量 GitHub CLI 指令（`pr`、`issue`、`repo`、`run`、`release`、`api` 等）直接可用并自动注入选中多账号凭据
+- **仓库简写与灵活克隆**：`gha clone owner/repo` 原生支持简写仓库格式，并支持 `-a`/`--account` 与 `-d`/`--dir` 参数指定账号与目标目录
+- **直观账号认证状态**：`gha list` 清晰展示每个账号的 OAuth Token 登录状态（`logged in` / `no token`）
+- **Git 命令透明兼容与代理**：`gha git clone` 等同于 `gha clone`；支持 `gha git <command>` 透明转发，并可通过 `--account` / `-a` 临时指定账号上下文
+- **快速打开浏览器**：`gha open`（别名 `browse`）一键在系统浏览器中打开当前仓库或指定账号的 GitHub 页面
+- **交互式账号切换与别名**：`gha use` / `gha switch` 支持交互式列出与选择账号，支持 `gha whoami` 与 `gha status` 快捷查看状态
+- **AI Agent (智能体) 专属集成**：内置 `skills/gha-github-workflow`，让 AI 编程助手优先且原生使用 `gha`，避免与系统单账号 `gh` 产生权限冲突
 - 通过 Git credential helper 让 HTTPS 的 `pull`、`fetch` 和 `push` 使用当前账号
 - 按本地或全局范围写入 Git 身份
 - 可选地按账号协议更新 `origin` remote
 - 根据当前 GitHub 仓库的 `origin` remote 自动选择账号
 - 提供登录、退出、编辑、诊断和 Shell completion
-- 通过指定账号或自动选择账号克隆 GitHub 仓库，并把账号凭据和 Git 身份写入新仓库的本地配置
-- **Git 命令透明兼容与代理**：`gha git clone` 等同于 `gha clone`；支持 `gha git <command>` 透明转发，并可通过 `--account` / `-a` 临时指定账号上下文
-- **快速打开浏览器**：`gha open`（别名 `browse`）一键在系统浏览器中打开当前仓库或指定账号的 GitHub 页面
-- **交互式账号切换与别名**：`gha use` / `gha switch` 支持交互式列出与选择账号，支持 `gha whoami` 与 `gha status` 快捷查看状态
 
 ## 环境要求
 
@@ -195,16 +202,15 @@ gha --config-dir "${HOME}/.config/gha-dev" list
 | `gha status` | 查看当前账号在 GitHub 服务器端的登录状态 |
 | `gha git <command...>` / `gha <git-command>` | Git 原生命令透明代理（`gha push` 等同于 `gha git push`，支持 `-a`/`--account` 指定临时账号） |
 | `gha git clone <repo>` | Git 兼容克隆，等同于 `gha clone` |
-| `gha token [alias]` | 查看或复制指定/当前账号的 OAuth Token（支持 `-c` 复制到剪贴板，借鉴 `gh auth token`） |
+| `gha token [alias]` | 查看、复制或检验 Token（支持 `-c` 复制剪贴板，`--check`/`--scopes` 校验有效性与权限作用域） |
 | `gha gh <command...>` | GitHub CLI 深度集成：执行 `gh` 命令时自动注入对应账号的 `GH_TOKEN` 与 `GH_HOST` |
 | `gha pr` / `gha issue` / `gha run` / `gha api` | GitHub CLI 快捷指令透传（自动注入当前激活账号凭据） |
 | `gha open [alias]` | 在浏览器中打开当前仓库或账号主页（支持 `--pr`, `--issues`, `--actions`，别名 `browse`） |
 | `gha doctor` | 检查 Git、配置和 OAuth 登录状态 |
 | `gha sync` | 根据当前 GitHub 账号同步 Git 身份 |
 | `gha auto` | 根据当前仓库 origin 自动选择账号，未登录时手动填写 |
-| `gha login <alias>` | 登录并保存账号配置（自动请求 `read:user`, `repo`, `workflow` 作用域） |
-| `gha clone <repo> use <alias>` | 使用指定账号克隆仓库并写入仓库本地配置 |
-| `gha clone <repo>` | 自动选择账号；没有可用凭据时进入 OAuth 登录 |
+| `gha login <alias>` | 登录并保存账号配置（支持 Device Flow 浏览器授权或 `--token`/`--with-token` PAT 直接登录；自动获取真实姓名与邮箱） |
+| `gha clone <repo>` | 克隆仓库并自动注入本地凭据配置（支持 `-a`/`--account` 指定账号，`-d`/`--dir` 指定目录，或 `use <alias>` 语法） |
 | `gha logout <alias>` | 删除本地保存的指定 OAuth credential |
 | `gha edit [alias]` | 用 `$EDITOR` 编辑账号配置 |
 | `gha remote` | 查看或处理 remote |
@@ -222,20 +228,33 @@ gha use personal --global
 gha use personal --update-remote
 gha sync --global
 
-# 查看或提取 OAuth Token（支持直接复制到剪贴板，方便脚本与第三方工具调用）
-gha token                      # 打印当前激活账号的 Access Token
-gha token work                 # 打印 work 账号的 Access Token
-gha token -c                   # 复制当前账号 Token 到系统剪贴板
+# 账号登录与自动邮箱解析（无需手动输入 Email）
+gha login personal               # 启动 Device Flow 授权，登录后自动拉取主邮箱与真实姓名
+gha login work --token ghp_xxxx  # 适用于已有 PAT 或 CI 场景，免浏览器直接验证并加密导入
+gha login work --with-token < pat.txt # 从标准输入读取 Token
 
-# GitHub CLI (gh) 深度集成与多账号上下文无缝注入
+# 查看、提取与自检 OAuth / PAT Token
+gha token                        # 打印当前激活账号的 Access Token
+gha token work                   # 打印 work 账号的 Access Token
+gha token -c                     # 复制当前账号 Token 到系统剪贴板
+gha token --check                # 联网检测当前账号 Token 有效性与完整作用域（显式检查 workflow 权限）
+gha token work --scopes          # 查看指定账号在 GitHub 拥有的 Scopes 权限
+
+# GitHub CLI (gh) 自动托管与多账号上下文透传（本地无需提前安装 gh）
 gha gh pr list                 # 自动以当前激活账号身份查看 PR 列表
 gha --account work gh pr create # 临时指定 work 账号创建 PR
 gha pr list                    # 快捷指令（直接无缝透传至 gh pr list）
+gha repo list                  # 快捷指令（查看仓库列表）
 gha issue list                 # 快捷指令（直接无缝透传至 gh issue list）
+gha release download v1.0.0    # 快捷指令（下载 Release 资产）
 gha api /user                  # 快捷调用 GitHub REST API
+gha gh path                    # 查看当前生效的 gh 路径（system 还是 managed）
+gha gh install                 # 主动下载安装/重装 gha 托管的官方 GitHub CLI 二进制
 
-# Git 完整无感转移（中间加不加 git 完全一致）
-gha clone https://github.com/OWNER/REPO.git       # 等同于 gha git clone ...
+# Git 完整无感转移与简写支持（中间加不加 git 完全一致）
+gha clone cli/cli                                      # 支持简写 owner/repo 克隆
+gha clone cli/cli -a personal -d ./my-cli              # 指定克隆账号与目标目录
+gha clone https://github.com/OWNER/REPO.git            # 等同于 gha git clone ...
 gha status                                       # 等同于 gha git status
 gha push origin main                             # 等同于 gha git push origin main
 gha commit -m "feat: hello"                      # 等同于 gha git commit -m ...
@@ -259,6 +278,7 @@ gha open personal                                # 打开 personal 账号个人�
 
 # 使用指定账号克隆私有仓库
 gha clone https://github.com/OWNER/PRIVATE_REPO.git use personal
+gha clone OWNER/PRIVATE_REPO -a personal
 
 # 自动选择账号（auto 可以省略）
 gha clone https://github.com/OWNER/PRIVATE_REPO.git
@@ -283,15 +303,24 @@ gha completion bash > "${HOME}/.local/share/bash-completion/completions/gha"
 gha completion fish > "${HOME}/.config/fish/completions/gha.fish"
 ```
 
+## AI 编程助手与智能体集成 (Agent Skill)
+
+本项目针对 AI 辅助编程（如 Google Antigravity、Claude Code、Cursor、GitHub Copilot CLI 等）内置了专属 Skill：
+- **定义文件**：[`skills/gha-github-workflow/SKILL.md`](skills/gha-github-workflow/SKILL.md)
+- **核心作用**：
+  - 智能体在需要执行 Git 提交、推送、克隆、PR 查看/创建、Issue 管理、CI 运行状态跟踪时，会自动优先调用 `gha` 系列命令（如 `gha git push`、`gha pr create`、`gha run list` 等）。
+  - 智能感知多账号状态（`gha list` / `gha status`），在多账号开发环境中自动选择或提示切换正确身份，彻底避免系统裸 `gh` 或单账号 Git 配置引起的 403 权限越权或身份污染。
+
 ## 项目结构
 
 ```text
 gh-account/
 ├── cmd/                 # Cobra 命令与 cmd/gha 可执行入口
-├── internal/            # 配置、原生 Git、OAuth 和 remote 服务
-├── configs/              # 配置示例
-├── scripts/              # 发布构建脚本
-├── .github/workflows/    # CI 与 Release workflow
+├── internal/            # 配置、原生 Git、OAuth、gh 引擎与 remote 服务
+├── skills/              # 面向 AI Coding 智能体的技能规范 (SKILL.md)
+├── configs/             # 配置示例
+├── scripts/             # 发布构建脚本
+├── .github/workflows/   # CI 与 Release workflow
 ├── Makefile
 └── go.mod
 ```

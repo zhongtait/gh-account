@@ -2,25 +2,29 @@ package cmd
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/zhongtait/gh-account/internal/config"
+	"github.com/zhongtait/gh-account/internal/github"
 	"github.com/zhongtait/gh-account/internal/terminal"
 )
 
 func newLoginCmd() *cobra.Command {
 	var (
-		hostname string
-		protocol string
-		gitName  string
-		email    string
+		hostname  string
+		protocol  string
+		gitName   string
+		email     string
+		token     string
+		withToken bool
 	)
 
 	cmd := &cobra.Command{
 		Use:               "login [alias]",
-		Short:             "Log in with GitHub OAuth and save the account profile",
+		Short:             "Log in with GitHub OAuth or Personal Access Token and save the account profile",
 		Args:              cobra.MaximumNArgs(1),
 		ValidArgsFunction: completeAccountAliases,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -28,9 +32,6 @@ func newLoginCmd() *cobra.Command {
 				return err
 			}
 			reader := bufio.NewReader(deps.Stdin)
-			if err := ensureOAuthClientID(reader); err != nil {
-				return err
-			}
 
 			alias := ""
 			if len(args) == 1 {
@@ -62,14 +63,47 @@ func newLoginCmd() *cobra.Command {
 			}
 
 			ctx := commandContext(cmd)
-			if err := deps.GitHub.Login(ctx, hostname, protocol); err != nil {
-				return fmt.Errorf("GitHub OAuth login failed: %w", err)
+			var loginName string
+			var detectedProfile github.UserProfile
+
+			if token != "" || withToken {
+				if withToken && token == "" {
+					terminal.Info(deps.Stdout, "Enter Personal Access Token: ")
+					line, err := reader.ReadString('\n')
+					if err != nil && len(line) == 0 {
+						return fmt.Errorf("read token from stdin: %w", err)
+					}
+					token = strings.TrimSpace(line)
+				}
+				if tokenClient, ok := deps.GitHub.(github.TokenLoginClient); ok {
+					prof, err := tokenClient.LoginWithToken(ctx, hostname, token)
+					if err != nil {
+						return fmt.Errorf("GitHub token login failed: %w", err)
+					}
+					loginName = prof.Login
+					detectedProfile = prof
+				} else {
+					return errors.New("token login is not supported by GitHub client")
+				}
+			} else {
+				if err := ensureOAuthClientID(reader); err != nil {
+					return err
+				}
+				if err := deps.GitHub.Login(ctx, hostname, protocol); err != nil {
+					return fmt.Errorf("GitHub OAuth login failed: %w", err)
+				}
+				var err error
+				loginName, err = deps.GitHub.CurrentLogin(ctx)
+				if err != nil {
+					return fmt.Errorf("login succeeded but failed to read active GitHub user: %w", err)
+				}
+				if profileClient, ok := deps.GitHub.(github.ProfileClient); ok {
+					if prof, err := profileClient.CurrentProfile(ctx); err == nil {
+						detectedProfile = prof
+					}
+				}
 			}
 
-			loginName, err := deps.GitHub.CurrentLogin(ctx)
-			if err != nil {
-				return fmt.Errorf("login succeeded but failed to read active GitHub user: %w", err)
-			}
 			if strings.TrimSpace(loginName) == "" {
 				return fmt.Errorf("login succeeded but active GitHub user is empty")
 			}
@@ -80,13 +114,22 @@ func newLoginCmd() *cobra.Command {
 
 			if gitName == "" {
 				defaultName := existing.GitName
+				if defaultName == "" && detectedProfile.Name != "" {
+					defaultName = detectedProfile.Name
+				}
 				if defaultName == "" {
 					defaultName = loginName
 				}
 				gitName = defaultName
 			}
 			if email == "" {
-				email, err = readValue(reader, "Email", existing.Email)
+				defaultEmail := existing.Email
+				if defaultEmail == "" && detectedProfile.Email != "" {
+					defaultEmail = detectedProfile.Email
+					terminal.Info(deps.Stdout, "Detected GitHub email: %s", terminal.Bold(defaultEmail))
+				}
+				var err error
+				email, err = readValue(reader, "Email", defaultEmail)
 				if err != nil {
 					return err
 				}
@@ -120,6 +163,8 @@ func newLoginCmd() *cobra.Command {
 	cmd.Flags().StringVar(&protocol, "protocol", "", "git protocol to prefer during login (https|ssh)")
 	cmd.Flags().StringVar(&gitName, "git-name", "", "git user.name to store after login")
 	cmd.Flags().StringVar(&email, "email", "", "git user.email to store after login")
+	cmd.Flags().StringVar(&token, "token", "", "authenticate directly with a Personal Access Token (PAT)")
+	cmd.Flags().BoolVar(&withToken, "with-token", false, "read Personal Access Token from stdin")
 	return cmd
 }
 

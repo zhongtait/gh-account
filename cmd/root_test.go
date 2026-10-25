@@ -177,12 +177,12 @@ func TestIsKnownGHCommandAndExecution(t *testing.T) {
 		return "/usr/bin/gh", nil
 	}
 	var executedGHArgs []string
-	ghExec = func(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, extraEnv []string, args ...string) error {
+	ghExec = func(ctx context.Context, binary string, stdin io.Reader, stdout, stderr io.Writer, extraEnv []string, args ...string) error {
 		executedGHArgs = args
 		return nil
 	}
 
-	for _, cmd := range []string{"pr", "issue", "issues", "api", "run", "gist", "release", "search", "workflow", "codespace"} {
+	for _, cmd := range []string{"pr", "issue", "issues", "api", "run", "gist", "release", "search", "workflow", "codespace", "repo", "browse", "cache"} {
 		if !isKnownGHCommand(cmd) {
 			t.Fatalf("expected true for %s", cmd)
 		}

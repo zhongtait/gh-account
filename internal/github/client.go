@@ -20,9 +20,10 @@ import (
 const (
 	defaultHostname = "github.com"
 	// workflow is required when GitHub Actions workflow files are pushed.
+	// user:email allows retrieving the primary verified email even if hidden on profile.
 	// Existing tokens do not gain new scopes automatically; re-running
 	// `gha login <alias>` requests this expanded set and replaces the token.
-	defaultScope = "read:user,repo,workflow"
+	defaultScope = "read:user,user:email,repo,workflow"
 )
 
 // Client abstracts GitHub authentication operations.
@@ -32,6 +33,34 @@ type Client interface {
 	Status(ctx context.Context) (string, error)
 	Login(ctx context.Context, hostname string, gitProtocol string) error
 	Logout(ctx context.Context, login string, hostname string) error
+}
+
+// UserProfile contains basic GitHub profile details retrieved from the API.
+type UserProfile struct {
+	Login string
+	Name  string
+	Email string
+}
+
+// ProfileClient is implemented by clients that can fetch user profile details.
+type ProfileClient interface {
+	CurrentProfile(ctx context.Context) (UserProfile, error)
+}
+
+// TokenLoginClient is implemented by clients that can authenticate directly using a Personal Access Token.
+type TokenLoginClient interface {
+	LoginWithToken(ctx context.Context, hostname string, token string) (UserProfile, error)
+}
+
+// TokenInfo contains metadata about a GitHub token.
+type TokenInfo struct {
+	Login  string
+	Scopes []string
+}
+
+// TokenInspector is implemented by clients that can inspect token metadata.
+type TokenInspector interface {
+	InspectToken(ctx context.Context, hostname, token string) (TokenInfo, error)
 }
 
 // HostClient is implemented by clients that can switch an account on a
@@ -333,6 +362,174 @@ func (c *OAuthClient) getUser(ctx context.Context, credential config.Credential)
 		return userResponse{}, errors.New("GitHub returned an empty login")
 	}
 	return user, nil
+}
+
+type userEmailResponse struct {
+	Email    string `json:"email"`
+	Primary  bool   `json:"primary"`
+	Verified bool   `json:"verified"`
+}
+
+func (c *OAuthClient) getPrimaryEmail(ctx context.Context, credential config.Credential) (string, error) {
+	request, err := newRequestWithContext(ctx, http.MethodGet, apiURL(credential.Hostname, "/user/emails"), nil)
+	if err != nil {
+		return "", fmt.Errorf("create request: %w", err)
+	}
+	request.Header.Set("Accept", "application/vnd.github+json")
+	request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	request.Header.Set("Authorization", "Bearer "+credential.AccessToken)
+	response, err := c.httpClient().Do(request)
+	if err != nil {
+		return "", fmt.Errorf("execute request: %w", err)
+	}
+	defer func() {
+		io.Copy(io.Discard, response.Body)
+		response.Body.Close()
+	}()
+	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	if err != nil {
+		return "", fmt.Errorf("read response body: %w", err)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return "", fmt.Errorf("GitHub returned HTTP %d: %s", response.StatusCode, responseMessage(body))
+	}
+	var emails []userEmailResponse
+	if err := json.Unmarshal(body, &emails); err != nil {
+		return "", fmt.Errorf("parse response: %w", err)
+	}
+	var fallback string
+	for _, e := range emails {
+		if e.Primary && e.Verified {
+			return e.Email, nil
+		}
+		if e.Primary && fallback == "" {
+			fallback = e.Email
+		} else if e.Verified && fallback == "" {
+			fallback = e.Email
+		}
+	}
+	if fallback != "" {
+		return fallback, nil
+	}
+	if len(emails) > 0 {
+		return emails[0].Email, nil
+	}
+	return "", nil
+}
+
+// CurrentProfile returns the profile of the current active GitHub account.
+func (c *OAuthClient) CurrentProfile(ctx context.Context) (UserProfile, error) {
+	auth, err := c.Store.LoadAuth()
+	if err != nil {
+		return UserProfile{}, fmt.Errorf("load auth: %w", err)
+	}
+	active := auth.Active
+	if active == "" {
+		return UserProfile{}, errors.New("no active GitHub account")
+	}
+	credential, ok := auth.Credentials[active]
+	if !ok || strings.TrimSpace(credential.AccessToken) == "" {
+		return UserProfile{}, fmt.Errorf("no credential found for %s", active)
+	}
+	user, err := c.getUser(ctx, credential)
+	if err != nil {
+		return UserProfile{}, err
+	}
+	email := user.Email
+	if email == "" {
+		if primaryEmail, err := c.getPrimaryEmail(ctx, credential); err == nil && primaryEmail != "" {
+			email = primaryEmail
+		}
+	}
+	return UserProfile{
+		Login: user.Login,
+		Name:  user.Name,
+		Email: email,
+	}, nil
+}
+
+// LoginWithToken authenticates using a direct Personal Access Token and stores it.
+func (c *OAuthClient) LoginWithToken(ctx context.Context, hostname string, token string) (UserProfile, error) {
+	hostname = normalizeHostname(hostname)
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return UserProfile{}, errors.New("access token cannot be empty")
+	}
+	tempCred := config.Credential{
+		Hostname:    hostname,
+		AccessToken: token,
+	}
+	user, err := c.getUser(ctx, tempCred)
+	if err != nil {
+		return UserProfile{}, fmt.Errorf("verify GitHub token: %w", err)
+	}
+	email := user.Email
+	if email == "" {
+		if primaryEmail, err := c.getPrimaryEmail(ctx, tempCred); err == nil && primaryEmail != "" {
+			email = primaryEmail
+		}
+	}
+	key := credentialKey(hostname, user.Login)
+	credential := config.Credential{
+		Hostname:    hostname,
+		Login:       user.Login,
+		AccessToken: token,
+		TokenType:   "bearer",
+	}
+	if err := c.Store.UpdateAuth(func(auth *config.AuthFile) error {
+		auth.Credentials[key] = credential
+		auth.Active = key
+		return nil
+	}); err != nil {
+		return UserProfile{}, fmt.Errorf("save GitHub credential: %w", err)
+	}
+	return UserProfile{
+		Login: user.Login,
+		Name:  user.Name,
+		Email: email,
+	}, nil
+}
+
+// InspectToken queries token scopes and metadata from GitHub.
+func (c *OAuthClient) InspectToken(ctx context.Context, hostname, token string) (TokenInfo, error) {
+	hostname = normalizeHostname(hostname)
+	request, err := newRequestWithContext(ctx, http.MethodGet, apiURL(hostname, "/user"), nil)
+	if err != nil {
+		return TokenInfo{}, fmt.Errorf("create request: %w", err)
+	}
+	request.Header.Set("Accept", "application/vnd.github+json")
+	request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	request.Header.Set("Authorization", "Bearer "+token)
+	response, err := c.httpClient().Do(request)
+	if err != nil {
+		return TokenInfo{}, fmt.Errorf("execute request: %w", err)
+	}
+	defer func() {
+		io.Copy(io.Discard, response.Body)
+		response.Body.Close()
+	}()
+	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	if err != nil {
+		return TokenInfo{}, fmt.Errorf("read response body: %w", err)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return TokenInfo{}, fmt.Errorf("GitHub returned HTTP %d: %s", response.StatusCode, responseMessage(body))
+	}
+	var user userResponse
+	_ = json.Unmarshal(body, &user)
+
+	var scopes []string
+	if scopeHeader := response.Header.Get("X-OAuth-Scopes"); scopeHeader != "" {
+		for _, s := range strings.Split(scopeHeader, ",") {
+			if trimmed := strings.TrimSpace(s); trimmed != "" {
+				scopes = append(scopes, trimmed)
+			}
+		}
+	}
+	return TokenInfo{
+		Login:  user.Login,
+		Scopes: scopes,
+	}, nil
 }
 
 func (c *OAuthClient) doForm(ctx context.Context, endpoint string, form url.Values) ([]byte, int, error) {

@@ -33,6 +33,8 @@ type tokenResponse struct {
 
 type userResponse struct {
 	Login string `json:"login"`
+	Name  string `json:"name"`
+	Email string `json:"email"`
 }
 
 // maxPollRetries bounds transient network retries so an offline machine

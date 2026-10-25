@@ -112,4 +112,22 @@ func TestDoctorInvalidAccounts(t *testing.T) {
 	if report.Healthy() {
 		t.Fatalf("invalid config reported healthy: %+v", report)
 	}
+
+	// Test managed gh detection
+	binDir := filepath.Join(store.Dir, "bin")
+	_ = os.MkdirAll(binDir, 0o755)
+	_ = os.WriteFile(filepath.Join(binDir, "gh"), []byte("echo"), 0o755)
+	rep := Runner{
+		Store:    store,
+		LookPath: func(string) (string, error) { return "", errors.New("none") },
+	}.Run(context.Background())
+	foundManaged := false
+	for _, c := range rep.Checks {
+		if c.Name == "gh" && c.OK {
+			foundManaged = true
+		}
+	}
+	if !foundManaged {
+		t.Fatal("expected managed gh check to pass")
+	}
 }

@@ -18,6 +18,7 @@ func newStatusCmd() *cobra.Command {
 				return err
 			}
 			terminal.Info(deps.Stdout, "%s", status)
+			terminal.Info(deps.Stdout, "Run %s to inspect token scopes and permissions", terminal.Bold("gha token --check"))
 			return nil
 		},
 	}

@@ -78,16 +78,24 @@ func newTokenCmd() *cobra.Command {
 					if len(info.Scopes) > 0 {
 						terminal.Info(deps.Stdout, "Scopes: %s", strings.Join(info.Scopes, ", "))
 						hasWorkflow := false
+						hasReadOrg := false
 						for _, s := range info.Scopes {
 							if s == "workflow" {
 								hasWorkflow = true
-								break
+							}
+							if s == "read:org" {
+								hasReadOrg = true
 							}
 						}
 						if hasWorkflow {
 							terminal.Success(deps.Stdout, "✓ workflow scope present (Actions push permitted)")
 						} else {
 							terminal.Warn(deps.Stdout, "⚠ workflow scope missing (pushing .github/workflows/*.yml may fail)")
+						}
+						if hasReadOrg {
+							terminal.Success(deps.Stdout, "✓ read:org scope present (PR comments & org access permitted)")
+						} else {
+							terminal.Warn(deps.Stdout, "⚠ read:org scope missing (viewing PR comments or org items may fail)")
 						}
 					} else {
 						terminal.Info(deps.Stdout, "Scopes: (none or fine-grained PAT)")

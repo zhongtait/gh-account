@@ -21,9 +21,11 @@ const (
 	defaultHostname = "github.com"
 	// workflow is required when GitHub Actions workflow files are pushed.
 	// user:email allows retrieving the primary verified email even if hidden on profile.
+	// read:org allows reading organization and team memberships (required for PR comments, org repos).
+	// gist allows managing GitHub Gists.
 	// Existing tokens do not gain new scopes automatically; re-running
 	// `gha login <alias>` requests this expanded set and replaces the token.
-	defaultScope = "read:user,user:email,repo,workflow"
+	defaultScope = "read:user,user:email,repo,workflow,read:org,gist"
 )
 
 // Client abstracts GitHub authentication operations.
@@ -87,6 +89,11 @@ type ClientIDClient interface {
 	SetClientID(clientID string)
 }
 
+// ScopesClient allows configuring custom OAuth scopes for login.
+type ScopesClient interface {
+	SetScopes(scopes string)
+}
+
 // BrowserOpener is the optional system integration used to open OAuth URLs.
 type BrowserOpener func(url string) error
 
@@ -98,6 +105,7 @@ type OAuthClient struct {
 	Output      io.Writer
 	ClientID    string
 	OpenBrowser BrowserOpener
+	Scopes      string
 }
 
 var (
@@ -135,6 +143,11 @@ func (c *OAuthClient) ConfiguredClientID() string {
 // SetClientID updates the public OAuth client ID used for future login calls.
 func (c *OAuthClient) SetClientID(clientID string) {
 	c.ClientID = strings.TrimSpace(clientID)
+}
+
+// SetScopes updates the OAuth scopes requested during device flow authentication.
+func (c *OAuthClient) SetScopes(scopes string) {
+	c.Scopes = strings.TrimSpace(scopes)
 }
 
 // CurrentLogin returns the login for the active locally stored credential.
@@ -254,6 +267,12 @@ func (c *OAuthClient) Login(ctx context.Context, hostname string, gitProtocol st
 	if err != nil {
 		return fmt.Errorf("request GitHub device code: %w", err)
 	}
+
+	scope := c.Scopes
+	if strings.TrimSpace(scope) == "" {
+		scope = defaultScope
+	}
+	fmt.Fprintf(c.Output, "Requesting OAuth scopes: %s\n", scope)
 
 	verificationURI := device.VerificationURIComplete
 	if verificationURI == "" {

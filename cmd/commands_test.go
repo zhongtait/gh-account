@@ -83,6 +83,7 @@ type commandGitHub struct {
 	login, host                                                                    string
 	hasCredential                                                                  bool
 	clientID                                                                       string
+	scopes                                                                         string
 	loginErr, switchErr, oauthErr, logoutErr, credentialErr, statusErr, profileErr error
 	profile                                                                        github.UserProfile
 }
@@ -133,6 +134,7 @@ func (g *commandGitHub) HasCredential(context.Context, string, string) (bool, er
 }
 func (g *commandGitHub) ConfiguredClientID() string { return g.clientID }
 func (g *commandGitHub) SetClientID(id string)      { g.clientID = id }
+func (g *commandGitHub) SetScopes(s string)         { g.scopes = s }
 func (g *commandGitHub) CurrentProfile(context.Context) (github.UserProfile, error) {
 	if g.profileErr != nil {
 		return github.UserProfile{}, g.profileErr
@@ -149,7 +151,7 @@ func (g *commandGitHub) InspectToken(_ context.Context, hostname, token string) 
 	if g.oauthErr != nil {
 		return github.TokenInfo{}, g.oauthErr
 	}
-	return github.TokenInfo{Login: g.login, Scopes: []string{"repo", "workflow", "read:user", "user:email"}}, nil
+	return github.TokenInfo{Login: g.login, Scopes: []string{"repo", "workflow", "read:user", "user:email", "read:org", "gist"}}, nil
 }
 
 func commandSetup(t *testing.T) (*config.Store, *commandGit, *commandGitHub, *bytes.Buffer) {
@@ -291,6 +293,14 @@ func TestCommandAddLoginAutoAndErrors(t *testing.T) {
 		t.Fatalf("unexpected auto account: %+v, %v", autoAcc, err)
 	}
 	gh.profile = github.UserProfile{}
+
+	// Test login with custom scopes
+	if err := runCommand(t, newLoginCmd(), "scopedacc", "-s", "repo,workflow,project", "--email", "scoped@example.com"); err != nil {
+		t.Fatalf("login with scopes failed: %v", err)
+	}
+	if gh.scopes != "repo,workflow,project" {
+		t.Fatalf("expected custom scopes set, got %q", gh.scopes)
+	}
 }
 
 func TestRootHelpersAndCompletion(t *testing.T) {

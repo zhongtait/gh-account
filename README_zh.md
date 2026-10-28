@@ -229,7 +229,8 @@ gha use personal --update-remote
 gha sync --global
 
 # 账号登录与自动邮箱解析（无需手动输入 Email）
-gha login personal               # 启动 Device Flow 授权，登录后自动拉取主邮箱与真实姓名
+gha login personal               # 启动 Device Flow 授权，默认包含 repo, workflow, read:org, gist, user 核心权限
+gha login work -s "repo,workflow,project" # 自定义或追加 OAuth 权限范围
 gha login work --token ghp_xxxx  # 适用于已有 PAT 或 CI 场景，免浏览器直接验证并加密导入
 gha login work --with-token < pat.txt # 从标准输入读取 Token
 
@@ -237,7 +238,7 @@ gha login work --with-token < pat.txt # 从标准输入读取 Token
 gha token                        # 打印当前激活账号的 Access Token
 gha token work                   # 打印 work 账号的 Access Token
 gha token -c                     # 复制当前账号 Token 到系统剪贴板
-gha token --check                # 联网检测当前账号 Token 有效性与完整作用域（显式检查 workflow 权限）
+gha token --check                # 联网检测当前账号 Token 有效性与完整作用域（显式检查 workflow 和 read:org 权限）
 gha token work --scopes          # 查看指定账号在 GitHub 拥有的 Scopes 权限
 
 # GitHub CLI (gh) 自动托管与多账号上下文透传（本地无需提前安装 gh）

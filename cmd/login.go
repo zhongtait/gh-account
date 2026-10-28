@@ -20,6 +20,7 @@ func newLoginCmd() *cobra.Command {
 		email     string
 		token     string
 		withToken bool
+		scopes    string
 	)
 
 	cmd := &cobra.Command{
@@ -86,6 +87,11 @@ func newLoginCmd() *cobra.Command {
 					return errors.New("token login is not supported by GitHub client")
 				}
 			} else {
+				if scopes != "" {
+					if scopesClient, ok := deps.GitHub.(github.ScopesClient); ok {
+						scopesClient.SetScopes(scopes)
+					}
+				}
 				if err := ensureOAuthClientID(reader); err != nil {
 					return err
 				}
@@ -155,6 +161,36 @@ func newLoginCmd() *cobra.Command {
 				terminal.Success(deps.Stdout, "Logged in and saved account %s", terminal.Bold(alias))
 			}
 			terminal.Info(deps.Stdout, "login=%s git_name=%s email=%s protocol=%s", account.Login, account.GitName, account.Email, account.Protocol)
+
+			if inspector, ok := deps.GitHub.(github.TokenInspector); ok {
+				var tokenToCheck string
+				if token != "" {
+					tokenToCheck = token
+				} else if cred, found, err := deps.Store.GetCredential(hostname, loginName); err == nil && found {
+					tokenToCheck = cred.AccessToken
+				}
+				if tokenToCheck != "" {
+					if info, err := inspector.InspectToken(ctx, hostname, tokenToCheck); err == nil && len(info.Scopes) > 0 {
+						terminal.Info(deps.Stdout, "Scopes: %s", strings.Join(info.Scopes, ", "))
+						hasWorkflow := false
+						hasReadOrg := false
+						for _, s := range info.Scopes {
+							if s == "workflow" {
+								hasWorkflow = true
+							}
+							if s == "read:org" {
+								hasReadOrg = true
+							}
+						}
+						if !hasWorkflow {
+							terminal.Warn(deps.Stdout, "⚠ workflow scope missing (pushing .github/workflows/*.yml may fail)")
+						}
+						if !hasReadOrg {
+							terminal.Warn(deps.Stdout, "⚠ read:org scope missing (viewing PR comments or org items may fail)")
+						}
+					}
+				}
+			}
 			return nil
 		},
 	}
@@ -163,6 +199,7 @@ func newLoginCmd() *cobra.Command {
 	cmd.Flags().StringVar(&protocol, "protocol", "", "git protocol to prefer during login (https|ssh)")
 	cmd.Flags().StringVar(&gitName, "git-name", "", "git user.name to store after login")
 	cmd.Flags().StringVar(&email, "email", "", "git user.email to store after login")
+	cmd.Flags().StringVarP(&scopes, "scopes", "s", "", "additional or custom OAuth scopes (comma-separated)")
 	cmd.Flags().StringVar(&token, "token", "", "authenticate directly with a Personal Access Token (PAT)")
 	cmd.Flags().BoolVar(&withToken, "with-token", false, "read Personal Access Token from stdin")
 	return cmd

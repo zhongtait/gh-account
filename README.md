@@ -210,7 +210,8 @@ gha use personal --update-remote
 gha sync --global
 
 # Login with automatic email & name detection (no manual typing)
-gha login personal               # Browser Device Flow; fetches name and primary email automatically
+gha login personal               # Browser Device Flow; defaults to golden 6 scopes (repo, workflow, read:org, gist, user)
+gha login work -s "repo,workflow,project" # Custom or additional OAuth scopes
 gha login work --token ghp_xxxx  # Direct PAT login for automation / CI
 gha login work --with-token < pat.txt # Read PAT securely from stdin
 
@@ -218,7 +219,7 @@ gha login work --with-token < pat.txt # Read PAT securely from stdin
 gha token                        # Print token for active account
 gha token work                   # Print token for work account
 gha token -c                     # Copy token to clipboard
-gha token --check                # Verify validity and scopes via GitHub API (checks `workflow` scope)
+gha token --check                # Verify validity and scopes via GitHub API (checks `workflow` and `read:org` scopes)
 gha token work --scopes          # Inspect scopes for work account
 
 # Auto-managed GitHub CLI (gh) execution (no manual gh installation required)

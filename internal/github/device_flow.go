@@ -46,7 +46,11 @@ var waitForPoll = wait
 func (c *OAuthClient) requestDeviceCode(ctx context.Context, hostname string) (deviceCodeResponse, error) {
 	form := url.Values{}
 	form.Set("client_id", c.ClientID)
-	form.Set("scope", defaultScope)
+	scope := c.Scopes
+	if strings.TrimSpace(scope) == "" {
+		scope = defaultScope
+	}
+	form.Set("scope", scope)
 	body, status, err := c.doForm(ctx, oauthURL(hostname, "/login/device/code"), form)
 	if err != nil {
 		return deviceCodeResponse{}, err

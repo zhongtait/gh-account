@@ -182,7 +182,7 @@ func TestIsKnownGHCommandAndExecution(t *testing.T) {
 		return nil
 	}
 
-	for _, cmd := range []string{"pr", "issue", "issues", "api", "run", "gist", "release", "search", "workflow", "codespace", "repo", "browse", "cache"} {
+	for _, cmd := range []string{"pr", "issue", "issues", "api", "run", "gist", "release", "search", "workflow", "codespace", "repo", "browse", "cache", "auth", "ssh-key", "gpg-key", "extension", "alias"} {
 		if !isKnownGHCommand(cmd) {
 			t.Fatalf("expected true for %s", cmd)
 		}

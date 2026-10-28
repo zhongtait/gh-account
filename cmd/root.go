@@ -91,7 +91,8 @@ func isKnownGHCommand(name string) bool {
 	switch name {
 	case "pr", "issue", "issues", "api", "run", "gist", "release", "search", "workflow", "codespace",
 		"repo", "browse", "cache", "secret", "variable", "label", "ruleset", "discussion",
-		"project", "attestation", "org", "co":
+		"project", "attestation", "org", "co", "auth", "ssh-key", "gpg-key", "extension", "alias",
+		"copilot", "agent-task":
 		return true
 	default:
 		return false

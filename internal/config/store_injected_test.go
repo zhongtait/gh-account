@@ -230,8 +230,8 @@ func TestInjectedAuthPersistenceAndCryptoErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	storeChmod = func(string, os.FileMode) error { return errors.New("chmod existing") }
-	if _, err := store.authKey(false); err == nil || !strings.Contains(err.Error(), "permissions") {
-		t.Fatal(err)
+	if _, err := store.authKey(false); err != nil {
+		t.Fatalf("reading auth key should not require chmod access: %v", err)
 	}
 	storeChmod = originalChmod
 
@@ -295,6 +295,34 @@ func TestInjectedAuthPersistenceAndCryptoErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	storeChmod = originalChmod
+}
+
+func TestLoadAuthDoesNotRequireWriteAccessToAuthKey(t *testing.T) {
+	restoreStoreHooks(t)
+	store := NewStore(t.TempDir())
+	auth := DefaultAuth()
+	auth.Active = "github.com|alice"
+	auth.Credentials[auth.Active] = Credential{
+		Hostname: "github.com", Login: "alice", AccessToken: "test-token",
+	}
+	if err := store.SaveAuth(auth); err != nil {
+		t.Fatalf("SaveAuth: %v", err)
+	}
+
+	originalChmod := storeChmod
+	storeChmod = func(path string, mode os.FileMode) error {
+		if filepath.Base(path) == "auth.key" {
+			return os.ErrPermission
+		}
+		return originalChmod(path, mode)
+	}
+	loaded, err := store.LoadAuth()
+	if err != nil {
+		t.Fatalf("LoadAuth with read-only auth.key: %v", err)
+	}
+	if got := loaded.Credentials[auth.Active].AccessToken; got != "test-token" {
+		t.Fatalf("loaded access token = %q, want test-token", got)
+	}
 }
 
 func TestInjectedMatchDirectoryAndLockErrors(t *testing.T) {

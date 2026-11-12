@@ -358,8 +358,14 @@ func (s *Store) authKey(create bool) ([]byte, error) {
 		if len(data) != 32 {
 			return nil, errors.New("auth.key must contain 32 bytes")
 		}
-		if chmodErr := storeChmod(path, 0o600); chmodErr != nil {
-			return nil, fmt.Errorf("set auth key permissions: %w", chmodErr)
+		// Decryption only needs read access to the key. Tightening permissions
+		// here makes credential reads fail in read-only contexts (for example,
+		// an agent sandbox) even when auth.key itself is readable. Permission
+		// changes are still enforced on the write path below.
+		if create {
+			if chmodErr := storeChmod(path, 0o600); chmodErr != nil {
+				return nil, fmt.Errorf("set auth key permissions: %w", chmodErr)
+			}
 		}
 		return data, nil
 	}

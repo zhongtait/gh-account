@@ -113,45 +113,62 @@ func newGHCmd() *cobra.Command {
 			var extraEnv []string
 			if err := requireInitialized(); err == nil {
 				accountsFile, err := deps.Store.LoadAccounts()
-				if err == nil {
-					var targetAccount config.Account
-					var foundAccount bool
+				if err != nil {
+					return err
+				}
 
-					if accountAlias != "" {
-						acc, exists := accountsFile.Accounts[accountAlias]
-						if !exists {
-							return fmt.Errorf("account %q not found", accountAlias)
-						}
-						targetAccount = acc
-						foundAccount = true
-					} else {
-						activeLogin, activeHostname, _ := currentGitHubIdentity(commandContext(cmd))
-						if activeLogin != "" {
-							for _, acc := range accountsFile.Accounts {
-								if sameGitHubAccount(activeLogin, activeHostname, acc.Login, acc.Hostname) {
-									targetAccount = acc
-									foundAccount = true
-									break
-								}
+				var targetAccount config.Account
+				var token string
+				var foundAccount bool
+
+				if accountAlias != "" {
+					acc, exists := accountsFile.Accounts[accountAlias]
+					if !exists {
+						return fmt.Errorf("account %q not found", accountAlias)
+					}
+					targetAccount = acc
+					foundAccount = true
+
+					cred, found, err := deps.Store.GetCredential(targetAccount.Hostname, targetAccount.Login)
+					if err != nil {
+						return err
+					}
+					if found {
+						token = cred.AccessToken
+					}
+				} else {
+					// The active gha credential is already available locally. Resolving
+					// it through CurrentIdentity would make every gha gh invocation
+					// depend on a network request to api.github.com before gh starts.
+					auth, err := deps.Store.LoadAuth()
+					if err != nil {
+						return err
+					}
+					cred, exists := auth.Credentials[auth.Active]
+					if exists && strings.TrimSpace(cred.AccessToken) != "" {
+						for _, acc := range accountsFile.Accounts {
+							if sameGitHubAccount(cred.Login, cred.Hostname, acc.Login, acc.Hostname) {
+								targetAccount = acc
+								token = cred.AccessToken
+								foundAccount = true
+								break
 							}
 						}
 					}
+				}
 
-					if foundAccount {
-						cred, found, err := deps.Store.GetCredential(targetAccount.Hostname, targetAccount.Login)
-						if err != nil {
-							return err
-						}
-						if found && strings.TrimSpace(cred.AccessToken) != "" {
-							extraEnv = []string{
-								"GH_TOKEN=" + cred.AccessToken,
-								"GITHUB_TOKEN=" + cred.AccessToken,
-								"GH_HOST=" + targetAccount.Hostname,
-							}
-						} else if accountAlias != "" {
-							return fmt.Errorf("account %q (%s) has no OAuth token; run gha login %s first", accountAlias, targetAccount.Login, accountAlias)
-						}
+				if foundAccount && strings.TrimSpace(token) != "" {
+					hostname := targetAccount.Hostname
+					if strings.TrimSpace(hostname) == "" {
+						hostname = "github.com"
 					}
+					extraEnv = []string{
+						"GH_TOKEN=" + token,
+						"GITHUB_TOKEN=" + token,
+						"GH_HOST=" + hostname,
+					}
+				} else if foundAccount && accountAlias != "" {
+					return fmt.Errorf("account %q (%s) has no OAuth token; run gha login %s first", accountAlias, targetAccount.Login, accountAlias)
 				}
 			} else if accountAlias != "" {
 				return err

@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -26,6 +28,13 @@ var (
 
 	defaultGHVersion = "2.96.0"
 	defaultBaseURL   = "https://github.com/cli/cli/releases/download"
+)
+
+const (
+	maxArchiveSize         = 128 << 20
+	maxChecksumFileSize    = 1 << 20
+	maxBinarySize          = 256 << 20
+	maxExpandedArchiveSize = 512 << 20
 )
 
 // Manager handles finding, downloading, and installing the GitHub CLI (gh) binary.
@@ -175,19 +184,17 @@ func (m *Manager) Install(ctx context.Context) (string, error) {
 		client = http.DefaultClient
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
+	archiveData, err := downloadReleaseAsset(ctx, client, downloadURL, "GitHub CLI", maxArchiveSize)
 	if err != nil {
-		return "", fmt.Errorf("create download request: %w", err)
+		return "", err
 	}
-
-	resp, err := client.Do(req)
+	checksumURL := fmt.Sprintf("%s/v%s/gh_%s_checksums.txt", m.baseURL(), version, version)
+	checksumData, err := downloadReleaseAsset(ctx, client, checksumURL, "GitHub CLI checksum file", maxChecksumFileSize)
 	if err != nil {
-		return "", fmt.Errorf("download GitHub CLI from %s: %w", downloadURL, err)
+		return "", err
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("download GitHub CLI from %s: received HTTP %d", downloadURL, resp.StatusCode)
+	if err := verifyReleaseChecksum(checksumData, archiveName, archiveData); err != nil {
+		return "", err
 	}
 
 	binDir := filepath.Join(m.ConfigDir, "bin")
@@ -200,17 +207,12 @@ func (m *Manager) Install(ctx context.Context) (string, error) {
 
 	var binaryData []byte
 	if ext == ".zip" {
-		data, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return "", fmt.Errorf("read response body: %w", err)
-		}
-		binaryData, err = extractBinaryFromZip(data, binName)
+		binaryData, err = extractBinaryFromZip(archiveData, binName)
 		if err != nil {
 			return "", err
 		}
 	} else {
-		var err error
-		binaryData, err = extractBinaryFromTarGz(resp.Body, binName)
+		binaryData, err = extractBinaryFromTarGz(bytes.NewReader(archiveData), binName)
 		if err != nil {
 			return "", err
 		}
@@ -236,9 +238,7 @@ func (m *Manager) Install(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("close temporary binary: %w", err)
 	}
 
-	// Remove target if exists before rename (for Windows compatibility)
-	_ = os.Remove(targetPath)
-	if err := os.Rename(tmpPath, targetPath); err != nil {
+	if err := replaceManagedBinary(tmpPath, targetPath); err != nil {
 		return "", fmt.Errorf("install binary to %s: %w", targetPath, err)
 	}
 
@@ -249,6 +249,99 @@ func (m *Manager) Install(ctx context.Context) (string, error) {
 	return targetPath, nil
 }
 
+func downloadReleaseAsset(ctx context.Context, client *http.Client, assetURL, label string, maxSize int64) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, assetURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create %s request: %w", label, err)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("download %s from %s: %w", label, assetURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("download %s from %s: received HTTP %d", label, assetURL, resp.StatusCode)
+	}
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("read %s response body: %w", label, err)
+	}
+	if int64(len(data)) > maxSize {
+		return nil, fmt.Errorf("%s exceeds the maximum allowed size of %d bytes", label, maxSize)
+	}
+	return data, nil
+}
+
+func verifyReleaseChecksum(checksumData []byte, assetName string, assetData []byte) error {
+	var expected string
+	for _, line := range strings.Split(string(checksumData), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || strings.TrimPrefix(fields[1], "*") != assetName {
+			continue
+		}
+		if expected != "" {
+			return fmt.Errorf("checksum file contains multiple entries for %s", assetName)
+		}
+		decoded, err := hex.DecodeString(fields[0])
+		if err != nil || len(decoded) != sha256.Size {
+			return fmt.Errorf("checksum file contains an invalid SHA-256 value for %s", assetName)
+		}
+		expected = strings.ToLower(fields[0])
+	}
+	if expected == "" {
+		return fmt.Errorf("checksum file does not contain an entry for %s", assetName)
+	}
+
+	actualSum := sha256.Sum256(assetData)
+	actual := hex.EncodeToString(actualSum[:])
+	if actual != expected {
+		return fmt.Errorf("SHA-256 checksum mismatch for %s", assetName)
+	}
+	return nil
+}
+
+func replaceManagedBinary(tmpPath, targetPath string) error {
+	if err := os.Rename(tmpPath, targetPath); err == nil {
+		return nil
+	} else {
+		targetInfo, statErr := os.Stat(targetPath)
+		if statErr != nil {
+			return err
+		}
+		if targetInfo.IsDir() {
+			return fmt.Errorf("existing target is a directory")
+		}
+	}
+
+	backupFile, err := os.CreateTemp(filepath.Dir(targetPath), "gh-backup-*")
+	if err != nil {
+		return fmt.Errorf("prepare backup of existing binary: %w", err)
+	}
+	backupPath := backupFile.Name()
+	if err := backupFile.Close(); err != nil {
+		_ = os.Remove(backupPath)
+		return fmt.Errorf("close backup placeholder: %w", err)
+	}
+	if err := os.Remove(backupPath); err != nil {
+		return fmt.Errorf("prepare backup path: %w", err)
+	}
+	if err := os.Rename(targetPath, backupPath); err != nil {
+		return fmt.Errorf("preserve existing binary before replacement: %w", err)
+	}
+	if err := os.Rename(tmpPath, targetPath); err != nil {
+		if restoreErr := os.Rename(backupPath, targetPath); restoreErr != nil {
+			return fmt.Errorf("replace failed: %w; restoring previous binary from %s also failed: %v", err, backupPath, restoreErr)
+		}
+		return err
+	}
+	if err := os.Remove(backupPath); err != nil {
+		return fmt.Errorf("new binary installed, but previous binary backup %s could not be removed: %w", backupPath, err)
+	}
+	return nil
+}
+
 func extractBinaryFromTarGz(r io.Reader, binName string) ([]byte, error) {
 	gzr, err := gzip.NewReader(r)
 	if err != nil {
@@ -256,7 +349,7 @@ func extractBinaryFromTarGz(r io.Reader, binName string) ([]byte, error) {
 	}
 	defer gzr.Close()
 
-	tr := tar.NewReader(gzr)
+	tr := tar.NewReader(io.LimitReader(gzr, maxExpandedArchiveSize))
 	for {
 		header, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -268,9 +361,15 @@ func extractBinaryFromTarGz(r io.Reader, binName string) ([]byte, error) {
 
 		if header.Typeflag == tar.TypeReg || header.Typeflag == tar.TypeRegA {
 			if filepath.Base(header.Name) == binName {
-				data, err := io.ReadAll(tr)
+				if header.Size > maxBinarySize {
+					return nil, fmt.Errorf("extracted binary %s exceeds the maximum allowed size of %d bytes", binName, maxBinarySize)
+				}
+				data, err := io.ReadAll(io.LimitReader(tr, maxBinarySize+1))
 				if err != nil {
 					return nil, fmt.Errorf("extract %s from tar: %w", binName, err)
+				}
+				if int64(len(data)) > maxBinarySize {
+					return nil, fmt.Errorf("extracted binary %s exceeds the maximum allowed size of %d bytes", binName, maxBinarySize)
 				}
 				return data, nil
 			}
@@ -288,15 +387,21 @@ func extractBinaryFromZip(data []byte, binName string) ([]byte, error) {
 
 	for _, f := range zr.File {
 		if !f.FileInfo().IsDir() && filepath.Base(f.Name) == binName {
+			if f.UncompressedSize64 > maxBinarySize {
+				return nil, fmt.Errorf("extracted binary %s exceeds the maximum allowed size of %d bytes", binName, maxBinarySize)
+			}
 			rc, err := f.Open()
 			if err != nil {
 				return nil, fmt.Errorf("open file in zip: %w", err)
 			}
 			defer rc.Close()
 
-			content, err := io.ReadAll(rc)
+			content, err := io.ReadAll(io.LimitReader(rc, maxBinarySize+1))
 			if err != nil {
 				return nil, fmt.Errorf("extract %s from zip: %w", binName, err)
+			}
+			if int64(len(content)) > maxBinarySize {
+				return nil, fmt.Errorf("extracted binary %s exceeds the maximum allowed size of %d bytes", binName, maxBinarySize)
 			}
 			return content, nil
 		}

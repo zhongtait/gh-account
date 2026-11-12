@@ -242,7 +242,10 @@ func TestGHCmdAccountAndExecution(t *testing.T) {
 		t.Fatalf("expected injected env for active account, got: %v", capturedEnv)
 	}
 
-	// 8. No active account runs gh without extraEnv
+	// 8. No active gha credential runs gh without extraEnv
+	if err := store.SaveAuth(config.AuthFile{Credentials: map[string]config.Credential{}}); err != nil {
+		t.Fatal(err)
+	}
 	gh.login = ""
 	capturedEnv = nil
 	if err := ghCmd.RunE(ghCmd, []string{"help"}); err != nil {

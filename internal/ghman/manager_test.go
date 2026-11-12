@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -56,6 +58,19 @@ func createTestZip(binName string, content []byte) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+func serveReleaseAsset(w http.ResponseWriter, r *http.Request, assetName string, assetData []byte) {
+	if strings.HasSuffix(r.URL.Path, "_checksums.txt") {
+		sum := sha256.Sum256(assetData)
+		_, _ = w.Write([]byte(hex.EncodeToString(sum[:]) + "  " + assetName + "\n"))
+		return
+	}
+	if strings.HasSuffix(r.URL.Path, assetName) {
+		_, _ = w.Write(assetData)
+		return
+	}
+	http.NotFound(w, r)
 }
 
 func TestFindGH(t *testing.T) {
@@ -121,12 +136,7 @@ func TestInstallTarGzSuccess(t *testing.T) {
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, ".tar.gz") {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/gzip")
-		_, _ = w.Write(tarData)
+		serveReleaseAsset(w, r, "gh_2.96.0_macOS_arm64.tar.gz", tarData)
 	}))
 	defer server.Close()
 
@@ -165,12 +175,7 @@ func TestInstallZipSuccess(t *testing.T) {
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, ".zip") {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/zip")
-		_, _ = w.Write(zipData)
+		serveReleaseAsset(w, r, "gh_2.96.0_windows_amd64.zip", zipData)
 	}))
 	defer server.Close()
 
@@ -223,7 +228,7 @@ func TestInstallArchiveMissingBinary(t *testing.T) {
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write(tarData)
+		serveReleaseAsset(w, r, "gh_2.96.0_linux_amd64.tar.gz", tarData)
 	}))
 	defer server.Close()
 
@@ -264,7 +269,7 @@ func TestEnsureGHWhenMissing(t *testing.T) {
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write(tarData)
+		serveReleaseAsset(w, r, "gh_2.96.0_linux_amd64.tar.gz", tarData)
 	}))
 	defer server.Close()
 

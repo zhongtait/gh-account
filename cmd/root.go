@@ -64,12 +64,12 @@ func ExecuteContextArgs(ctx context.Context, args []string) error {
 		return root.Execute()
 	}
 
+	args = extractLeadingRootFlags(args)
+
 	if isKnownRootCommand(root, args) {
 		root.SetArgs(args)
 		return root.Execute()
 	}
-
-	args = extractLeadingRootFlags(args)
 
 	if err := setupDeps(root); err != nil {
 		return err

@@ -279,7 +279,9 @@ func TestConditionalIncludesUseGitAndStayOverridden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gitDirSlash := filepath.ToSlash(gitDir)
+	// Git resolves Windows short paths before matching gitdir conditions. Use
+	// its canonical repository path so an 8.3 TEMP path matches as well.
+	gitDirSlash := realGit(t, root, "rev-parse", "--absolute-git-dir")
 	includedSlash := filepath.ToSlash(included)
 	conditional := fmt.Sprintf("\n[user]\n\tname = Parent User\n\temail = parent@example.com\n[includeIf \"gitdir:%s\"]\n\tpath = %s\n", gitDirSlash, includedSlash)
 	if err := os.WriteFile(configPath, append(data, []byte(conditional)...), 0o644); err != nil {

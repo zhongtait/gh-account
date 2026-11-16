@@ -30,6 +30,24 @@ var (
 	defaultBaseURL   = "https://github.com/cli/cli/releases/download"
 )
 
+// pinnedChecksums holds the SHA-256 of each official release archive for
+// defaultGHVersion. Verifying against a hash compiled into gha means a
+// compromised or spoofed release endpoint cannot swap the binary, which a
+// checksum file downloaded from that same endpoint would not prevent. These
+// values come from the GitHub release API (`digest` of each asset) and match
+// gh_<version>_checksums.txt.
+var pinnedChecksums = map[string]string{
+	"gh_2.96.0_macOS_amd64.zip":    "4bd449df9ad639391bc62b8032546f0fe9edcd8526e06682a4f88abd8c5d163c",
+	"gh_2.96.0_macOS_arm64.zip":    "f23a0c37d963aacc3bed703ccbd59b41c5ca22101fab7f00eb2b7cad23aba463",
+	"gh_2.96.0_linux_amd64.tar.gz": "83d5c2ccad5498f58bf6368acb1ab32588cf43ab3a4b1c301bf36328b1c8bd60",
+	"gh_2.96.0_linux_arm64.tar.gz": "06f86ec7103d41993b76cd78072f43595c34aaa56506d971d9860e67140bf909",
+	"gh_2.96.0_linux_386.tar.gz":   "fda636f771e43d1f19e2d42e3c578cc9d8e453d23093a6a47a7fac88825196ec",
+	"gh_2.96.0_linux_armv6.tar.gz": "14ff25ec64823415086214fb05b3e85aef21deba6a8d723a7ef8ead1cb977826",
+	"gh_2.96.0_windows_amd64.zip":  "c2d6acc935cd2f00e2144d7e036d5cd82e6b6bd5594e8c75aa75ef2a4ed6aac3",
+	"gh_2.96.0_windows_arm64.zip":  "c517e0b32c98a4ba90ac95af8d12cc3ac55781ab4ab72f9a91ce3de0541d2b09",
+	"gh_2.96.0_windows_386.zip":    "575bd472f1811d7d9a7f94f27f11a2decb6ae6711b56fec337675234c336ffe6",
+}
+
 const (
 	maxArchiveSize         = 128 << 20
 	maxChecksumFileSize    = 1 << 20
@@ -85,6 +103,28 @@ func (m *Manager) version() string {
 	return defaultGHVersion
 }
 
+// verifyPinnedChecksum compares a downloaded archive against the hash compiled
+// into gha, which the download server cannot influence. It reports whether a
+// pinned digest applied: custom versions have no compiled digest, so callers
+// fall back to the release checksum file for those. A mirror of the pinned
+// release must serve the same immutable asset bytes, otherwise installation is
+// refused even when the mirror also supplies a matching checksum file.
+func (m *Manager) verifyPinnedChecksum(assetName string, assetData []byte) (bool, error) {
+	if m.version() != defaultGHVersion {
+		return false, nil
+	}
+	expected, ok := pinnedChecksums[assetName]
+	if !ok {
+		return false, fmt.Errorf("no pinned SHA-256 is available for %s; set GHA_GH_VERSION to a supported release", assetName)
+	}
+	actualSum := sha256.Sum256(assetData)
+	actual := hex.EncodeToString(actualSum[:])
+	if actual != expected {
+		return false, fmt.Errorf("SHA-256 checksum mismatch for %s: downloaded content does not match the pinned release", assetName)
+	}
+	return true, nil
+}
+
 func (m *Manager) baseURL() string {
 	if m.BaseURL != "" {
 		return strings.TrimRight(m.BaseURL, "/")
@@ -135,13 +175,9 @@ func (m *Manager) EnsureGH(ctx context.Context) (string, error) {
 	return m.Install(ctx)
 }
 
-// Install downloads the official GitHub CLI release binary for the current platform and installs it.
-func (m *Manager) Install(ctx context.Context) (string, error) {
-	osName := m.goos()
-	archName := m.goarch()
-	version := m.version()
-
-	var ghOS string
+// releaseTarget maps a Go OS/architecture pair onto the names GitHub CLI uses
+// in its release assets.
+func releaseTarget(osName, archName string) (ghOS, ghArch string, err error) {
 	switch osName {
 	case "darwin":
 		ghOS = "macOS"
@@ -150,10 +186,9 @@ func (m *Manager) Install(ctx context.Context) (string, error) {
 	case "windows":
 		ghOS = "windows"
 	default:
-		return "", fmt.Errorf("automatic gh download does not support operating system %q; install gh manually", osName)
+		return "", "", fmt.Errorf("automatic gh download does not support operating system %q; install gh manually", osName)
 	}
 
-	var ghArch string
 	switch archName {
 	case "amd64":
 		ghArch = "amd64"
@@ -164,15 +199,45 @@ func (m *Manager) Install(ctx context.Context) (string, error) {
 	case "arm":
 		ghArch = "armv6"
 	default:
-		return "", fmt.Errorf("automatic gh download does not support architecture %q; install gh manually", archName)
+		return "", "", fmt.Errorf("automatic gh download does not support architecture %q; install gh manually", archName)
 	}
 
-	ext := ".tar.gz"
-	if osName == "windows" {
-		ext = ".zip"
-	}
+	return ghOS, ghArch, nil
+}
 
-	archiveName := fmt.Sprintf("gh_%s_%s_%s%s", version, ghOS, ghArch, ext)
+// archiveExt returns the release archive extension. GitHub CLI publishes .zip
+// for macOS and Windows and .tar.gz for Linux; publishing a .tar.gz name for
+// macOS would download nothing and, once pinned checksums exist, also fail the
+// checksum lookup.
+func archiveExt(osName string) string {
+	if osName == "darwin" || osName == "windows" {
+		return ".zip"
+	}
+	return ".tar.gz"
+}
+
+// releaseArchiveName builds the release asset name for a platform. It is the
+// single place that decides an archive name, so tests can assert that every
+// supported platform maps to an asset with a pinned checksum.
+func releaseArchiveName(osName, archName, version string) (string, error) {
+	ghOS, ghArch, err := releaseTarget(osName, archName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("gh_%s_%s_%s%s", version, ghOS, ghArch, archiveExt(osName)), nil
+}
+
+// Install downloads the official GitHub CLI release binary for the current platform and installs it.
+func (m *Manager) Install(ctx context.Context) (string, error) {
+	osName := m.goos()
+	archName := m.goarch()
+	version := m.version()
+
+	archiveName, err := releaseArchiveName(osName, archName, version)
+	if err != nil {
+		return "", err
+	}
+	ext := archiveExt(osName)
 	downloadURL := fmt.Sprintf("%s/v%s/%s", m.baseURL(), version, archiveName)
 
 	if m.Stdout != nil {
@@ -188,13 +253,23 @@ func (m *Manager) Install(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	checksumURL := fmt.Sprintf("%s/v%s/gh_%s_checksums.txt", m.baseURL(), version, version)
-	checksumData, err := downloadReleaseAsset(ctx, client, checksumURL, "GitHub CLI checksum file", maxChecksumFileSize)
+	// The compiled digest is the strongest check: it cannot be influenced by
+	// the server that served the archive. Only when no digest is pinned (a
+	// version selected through GHA_GH_VERSION) fall back to the release's own
+	// checksum file, which is weaker but still catches truncated downloads.
+	pinned, err := m.verifyPinnedChecksum(archiveName, archiveData)
 	if err != nil {
 		return "", err
 	}
-	if err := verifyReleaseChecksum(checksumData, archiveName, archiveData); err != nil {
-		return "", err
+	if !pinned {
+		checksumURL := fmt.Sprintf("%s/v%s/gh_%s_checksums.txt", m.baseURL(), version, version)
+		checksumData, err := downloadReleaseAsset(ctx, client, checksumURL, "GitHub CLI checksum file", maxChecksumFileSize)
+		if err != nil {
+			return "", err
+		}
+		if err := verifyReleaseChecksum(checksumData, archiveName, archiveData); err != nil {
+			return "", err
+		}
 	}
 
 	binDir := filepath.Join(m.ConfigDir, "bin")

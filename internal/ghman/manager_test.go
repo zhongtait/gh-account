@@ -23,7 +23,7 @@ func createTestTarGz(binName string, content []byte) ([]byte, error) {
 	tw := tar.NewWriter(gzw)
 
 	header := &tar.Header{
-		Name:     "gh_2.96.0_macOS_arm64/bin/" + binName,
+		Name:     "bin/" + binName,
 		Mode:     0o755,
 		Size:     int64(len(content)),
 		Typeflag: tar.TypeReg,
@@ -47,7 +47,7 @@ func createTestZip(binName string, content []byte) ([]byte, error) {
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 
-	w, err := zw.Create("gh_2.96.0_windows_amd64/bin/" + binName)
+	w, err := zw.Create("bin/" + binName)
 	if err != nil {
 		return nil, err
 	}
@@ -128,15 +128,15 @@ func TestEnsureGHExtant(t *testing.T) {
 	}
 }
 
-func TestInstallTarGzSuccess(t *testing.T) {
+func TestInstallMacOSZipSuccess(t *testing.T) {
 	dummyContent := []byte("#!/bin/sh\necho hello-gh\n")
-	tarData, err := createTestTarGz("gh", dummyContent)
+	zipData, err := createTestZip("gh", dummyContent)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		serveReleaseAsset(w, r, "gh_2.96.0_macOS_arm64.tar.gz", tarData)
+		serveReleaseAsset(w, r, "gh_2.96.1_macOS_arm64.zip", zipData)
 	}))
 	defer server.Close()
 
@@ -146,7 +146,7 @@ func TestInstallTarGzSuccess(t *testing.T) {
 	m.BaseURL = server.URL
 	m.GOOS = "darwin"
 	m.GOARCH = "arm64"
-	m.Version = "v2.96.0"
+	m.Version = "v2.96.1"
 	m.LookPath = func(file string) (string, error) {
 		return "", errors.New("not found")
 	}
@@ -175,7 +175,7 @@ func TestInstallZipSuccess(t *testing.T) {
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		serveReleaseAsset(w, r, "gh_2.96.0_windows_amd64.zip", zipData)
+		serveReleaseAsset(w, r, "gh_2.96.1_windows_amd64.zip", zipData)
 	}))
 	defer server.Close()
 
@@ -185,7 +185,7 @@ func TestInstallZipSuccess(t *testing.T) {
 	m.BaseURL = server.URL
 	m.GOOS = "windows"
 	m.GOARCH = "amd64"
-	m.Version = "2.96.0"
+	m.Version = "2.96.1"
 
 	path, err := m.Install(context.Background())
 	if err != nil {
@@ -228,7 +228,7 @@ func TestInstallArchiveMissingBinary(t *testing.T) {
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		serveReleaseAsset(w, r, "gh_2.96.0_linux_amd64.tar.gz", tarData)
+		serveReleaseAsset(w, r, "gh_2.96.1_linux_amd64.tar.gz", tarData)
 	}))
 	defer server.Close()
 
@@ -237,6 +237,7 @@ func TestInstallArchiveMissingBinary(t *testing.T) {
 	m.BaseURL = server.URL
 	m.GOOS = "linux"
 	m.GOARCH = "amd64"
+	m.Version = "2.96.1"
 
 	_, err = m.Install(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "not found in tar.gz archive") {
@@ -269,7 +270,7 @@ func TestEnsureGHWhenMissing(t *testing.T) {
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		serveReleaseAsset(w, r, "gh_2.96.0_linux_amd64.tar.gz", tarData)
+		serveReleaseAsset(w, r, "gh_2.96.1_linux_amd64.tar.gz", tarData)
 	}))
 	defer server.Close()
 
@@ -278,6 +279,7 @@ func TestEnsureGHWhenMissing(t *testing.T) {
 	m.BaseURL = server.URL
 	m.GOOS = "linux"
 	m.GOARCH = "amd64"
+	m.Version = "2.96.1"
 	m.LookPath = func(file string) (string, error) {
 		return "", errors.New("not found")
 	}
@@ -337,5 +339,152 @@ func TestVersionEnvOverride(t *testing.T) {
 	m := NewManager(t.TempDir(), nil, nil)
 	if v := m.version(); v != "2.50.0" {
 		t.Fatalf("expected 2.50.0, got %s", v)
+	}
+}
+
+func TestPinnedChecksumsCoverSupportedTargets(t *testing.T) {
+	for _, tc := range []struct{ os, arch, asset string }{
+		{"darwin", "amd64", "gh_2.96.0_macOS_amd64.zip"},
+		{"darwin", "arm64", "gh_2.96.0_macOS_arm64.zip"},
+		{"linux", "amd64", "gh_2.96.0_linux_amd64.tar.gz"},
+		{"linux", "arm64", "gh_2.96.0_linux_arm64.tar.gz"},
+		{"linux", "386", "gh_2.96.0_linux_386.tar.gz"},
+		{"linux", "arm", "gh_2.96.0_linux_armv6.tar.gz"},
+		{"windows", "amd64", "gh_2.96.0_windows_amd64.zip"},
+		{"windows", "arm64", "gh_2.96.0_windows_arm64.zip"},
+		{"windows", "386", "gh_2.96.0_windows_386.zip"},
+	} {
+		if _, ok := pinnedChecksums[tc.asset]; !ok {
+			t.Errorf("no pinned checksum for %s/%s (asset %s)", tc.os, tc.arch, tc.asset)
+		}
+	}
+}
+
+// TestReleaseArchiveNamesHavePinnedChecksums ties the archive naming to the
+// pinned table, so a platform cannot silently produce an asset name that the
+// default install path refuses. This is what the macOS .tar.gz regression broke.
+func TestReleaseArchiveNamesHavePinnedChecksums(t *testing.T) {
+	for _, tc := range []struct{ os, arch string }{
+		{"darwin", "amd64"},
+		{"darwin", "arm64"},
+		{"linux", "amd64"},
+		{"linux", "arm64"},
+		{"linux", "386"},
+		{"linux", "arm"},
+		{"windows", "amd64"},
+		{"windows", "arm64"},
+		{"windows", "386"},
+	} {
+		name, err := releaseArchiveName(tc.os, tc.arch, defaultGHVersion)
+		if err != nil {
+			t.Fatalf("%s/%s: %v", tc.os, tc.arch, err)
+		}
+		if _, ok := pinnedChecksums[name]; !ok {
+			t.Errorf("%s/%s names %s, which has no pinned checksum", tc.os, tc.arch, name)
+		}
+	}
+
+	if got := archiveExt("darwin"); got != ".zip" {
+		t.Errorf("macOS archive extension = %q, want .zip", got)
+	}
+	if got, err := releaseArchiveName("darwin", "arm64", "2.96.0"); err != nil || got != "gh_2.96.0_macOS_arm64.zip" {
+		t.Errorf("macOS archive = %q, %v", got, err)
+	}
+	if _, err := releaseArchiveName("solaris", "amd64", "2.96.0"); err == nil {
+		t.Error("unsupported OS accepted")
+	}
+	if _, err := releaseArchiveName("linux", "mips64", "2.96.0"); err == nil {
+		t.Error("unsupported architecture accepted")
+	}
+}
+
+// A mirror serving a tampered archive together with a self-consistent checksum
+// file must still be rejected for the pinned version: the compiled digest is
+// not something the download server can influence.
+func TestInstallRejectsTamperedMirrorEndToEnd(t *testing.T) {
+	tampered, err := createTestTarGz("gh", []byte("#!/bin/sh\necho evil\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serveReleaseAsset(w, r, "gh_2.96.0_linux_amd64.tar.gz", tampered)
+	}))
+	defer server.Close()
+
+	m := NewManager(t.TempDir(), nil, nil)
+	m.BaseURL = server.URL
+	m.GOOS = "linux"
+	m.GOARCH = "amd64"
+	if _, err := m.Install(context.Background()); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("mirror tampering not rejected: %v", err)
+	}
+	if _, err := os.Stat(m.ManagedPath()); !os.IsNotExist(err) {
+		t.Fatalf("binary was installed despite rejection: %v", err)
+	}
+}
+
+func TestInstallRejectsContentThatDoesNotMatchPinnedChecksum(t *testing.T) {
+	const asset = "gh_2.96.0_linux_amd64.tar.gz"
+	tarData, err := createTestTarGz("gh", []byte("#!/bin/sh\necho tampered\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serveReleaseAsset(w, r, asset, tarData)
+	}))
+	defer server.Close()
+
+	m := NewManager(t.TempDir(), nil, nil)
+	m.GOOS = "linux"
+	m.GOARCH = "amd64"
+	// A custom endpoint must not bypass the compiled digest for the pinned
+	// release, even if it serves a matching checksum file.
+	m.BaseURL = server.URL
+	if pinned, err := m.verifyPinnedChecksum(asset, tarData); err == nil || !strings.Contains(err.Error(), "checksum mismatch") || pinned {
+		t.Fatalf("custom endpoint bypassed the pinned check: pinned=%v err=%v", pinned, err)
+	}
+
+	m.BaseURL = ""
+	m.Version = "2.96.0"
+	if pinned, err := m.verifyPinnedChecksum(asset, tarData); err == nil || !strings.Contains(err.Error(), "pinned") || pinned {
+		t.Fatalf("tampered content accepted: pinned=%v err=%v", pinned, err)
+	}
+	if pinned, err := m.verifyPinnedChecksum("gh_9.9.9_linux_amd64.tar.gz", tarData); err == nil || !strings.Contains(err.Error(), "no pinned") || pinned {
+		t.Fatalf("unknown asset accepted: pinned=%v err=%v", pinned, err)
+	}
+
+	// Content matching the pinned digest must be accepted and report that a
+	// pinned check applied, so Install can skip the weaker checksum file.
+	original, hadOriginal := pinnedChecksums[asset]
+	sum := sha256.Sum256(tarData)
+	pinnedChecksums[asset] = hex.EncodeToString(sum[:])
+	t.Cleanup(func() {
+		if hadOriginal {
+			pinnedChecksums[asset] = original
+			return
+		}
+		delete(pinnedChecksums, asset)
+	})
+	pinned, err := m.verifyPinnedChecksum(asset, tarData)
+	if err != nil {
+		t.Fatalf("matching content rejected: %v", err)
+	}
+	if !pinned {
+		t.Fatal("matching pinned content did not report a pinned check")
+	}
+
+	// A non-default version has no compiled digest; Install must fall back to
+	// the release checksum file.
+	m.Version = "2.50.0"
+	if pinned, err := m.verifyPinnedChecksum(asset, tarData); err != nil || pinned {
+		t.Fatalf("non-default version: pinned=%v err=%v", pinned, err)
+	}
+
+	// Every shipped digest must be a valid SHA-256 hex string.
+	for name, digest := range pinnedChecksums {
+		decoded, err := hex.DecodeString(digest)
+		if err != nil || len(decoded) != sha256.Size {
+			t.Errorf("%s has an invalid SHA-256 value %q", name, digest)
+		}
 	}
 }

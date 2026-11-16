@@ -227,6 +227,7 @@ func setupDeps(cmd *cobra.Command) error {
 	}
 
 	store := config.NewStore(dir)
+	store.Warning = cmd.ErrOrStderr()
 	clientID := strings.TrimSpace(flagClientID)
 	if clientID == "" {
 		clientID = github.ClientIDFromEnv()

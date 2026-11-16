@@ -76,6 +76,14 @@ type IdentityClient interface {
 	CurrentIdentity(ctx context.Context) (login string, hostname string, err error)
 }
 
+// LocalIdentityClient exposes the active login and host from the local
+// credential store only, without validating the token against GitHub. Local
+// commands such as list, current, and token use it so they keep working
+// offline and stay fast.
+type LocalIdentityClient interface {
+	LocalIdentity(ctx context.Context) (login string, hostname string, err error)
+}
+
 // CredentialChecker reports whether a login has a locally stored OAuth
 // credential for a specific GitHub host.
 type CredentialChecker interface {
@@ -154,6 +162,28 @@ func (c *OAuthClient) SetScopes(scopes string) {
 func (c *OAuthClient) CurrentLogin(ctx context.Context) (string, error) {
 	login, _, err := c.CurrentIdentity(ctx)
 	return login, err
+}
+
+// LocalIdentity returns the active login and host from the local credential
+// store without contacting GitHub. It lets offline commands (list, current,
+// token, and the interactive picker) resolve the active account instantly.
+func (c *OAuthClient) LocalIdentity(ctx context.Context) (string, string, error) {
+	auth, err := c.Store.LoadAuth()
+	if err != nil {
+		return "", "", fmt.Errorf("load auth: %w", err)
+	}
+	if auth.Active == "" {
+		return "", "", errors.New("no active GitHub OAuth account; run gha login")
+	}
+	credential, ok := auth.Credentials[auth.Active]
+	if !ok || strings.TrimSpace(credential.AccessToken) == "" {
+		return "", "", errors.New("active GitHub OAuth credential is missing; run gha login")
+	}
+	login := strings.TrimSpace(credential.Login)
+	if login == "" {
+		return "", "", errors.New("active GitHub OAuth credential has no login; run gha login")
+	}
+	return login, normalizeHostname(credential.Hostname), nil
 }
 
 // CurrentIdentity returns the active login and host after validating the

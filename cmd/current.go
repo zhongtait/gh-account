@@ -51,7 +51,9 @@ func printCurrentSummary(cmd *cobra.Command, alias string, account config.Accoun
 
 	fmt.Fprintln(deps.Stdout, terminal.Bold("Current"))
 
-	if login, err := deps.GitHub.CurrentLogin(ctx); err != nil {
+	// Resolve the active account from the local credential store first; this
+	// keeps `gha current` fast and usable without network access.
+	if login, _, err := currentGitHubIdentity(ctx); err != nil {
 		terminal.Info(deps.Stdout, "GitHub : (unavailable)")
 	} else {
 		if alias != "" {

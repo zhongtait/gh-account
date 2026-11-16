@@ -30,8 +30,23 @@ func newAutoCmd() *cobra.Command {
 			}
 
 			ctx := commandContext(cmd)
+			var cwd string
+			if wd, err := commandGetwd(); err == nil {
+				cwd = wd
+			}
+
 			remoteURL, err := deps.Git.GetRemoteURL(ctx, "origin")
 			if err != nil {
+				// No origin remote: fall back to an explicit --alias or a
+				// configured directory binding so `gha auto` still selects an
+				// account for a workspace that has no remote yet.
+				if alias != "" {
+					return runUseForAuto(cmd, alias)
+				}
+				if boundAlias, _, found, matchErr := deps.Store.MatchDirectory(cwd); matchErr == nil && found {
+					terminal.Info(deps.Stdout, "No origin remote; using directory binding for %s", terminal.Bold(boundAlias))
+					return runUseForAuto(cmd, boundAlias)
+				}
 				return fmt.Errorf("unable to read origin remote: %w", err)
 			}
 			info, err := remote.Parse(remoteURL)
@@ -42,6 +57,18 @@ func newAutoCmd() *cobra.Command {
 			accountAlias, account, found, err := accountForRemote(info, alias)
 			if err != nil {
 				return err
+			}
+			if !found {
+				// A directory binding is an explicit per-workspace choice, so
+				// let it win over the manual-entry prompt when the remote
+				// owner has no configured profile.
+				if boundAlias, _, matched, matchErr := deps.Store.MatchDirectory(cwd); matchErr == nil && matched {
+					accountAlias = boundAlias
+					if bound, accErr := deps.Store.GetAccount(boundAlias); accErr == nil {
+						account = bound
+						found = true
+					}
+				}
 			}
 			loggedIn := false
 			if found {

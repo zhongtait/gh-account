@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/zhongtait/gh-account/internal/config"
+	"github.com/zhongtait/gh-account/internal/github"
 	"github.com/zhongtait/gh-account/internal/terminal"
 )
 
@@ -42,6 +43,22 @@ func newAddCmd() *cobra.Command {
 				loginName, getErr = deps.GitHub.CurrentLogin(ctx)
 				if getErr != nil {
 					return fmt.Errorf("failed to get login name after auth: %w", getErr)
+				}
+				// Reuse the profile lookup so `gha add` resolves the verified
+				// primary email exactly like `gha login`, instead of asking the
+				// user to retype it.
+				if profileClient, ok := deps.GitHub.(github.ProfileClient); ok {
+					if prof, profileErr := profileClient.CurrentProfile(ctx); profileErr == nil {
+						if gitName == "" {
+							gitName = prof.Name
+						}
+						if email == "" {
+							email = prof.Email
+							if email != "" {
+								terminal.Info(deps.Stdout, "Detected GitHub email: %s", terminal.Bold(email))
+							}
+						}
+					}
 				}
 			}
 

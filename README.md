@@ -152,10 +152,10 @@ The GitHub Actions [CI workflow](.github/workflows/ci.yml) enforces 90%+ stateme
 
 ## Configuration
 
-Default configuration directory: `~/.config/gha/`:
+Default configuration directory: `~/.config/gha/`. On Windows it defaults to `%APPDATA%\gha` instead:
 
 ```text
-~/.config/gha/
+~/.config/gha/            # or %APPDATA%\gha on Windows
 ├── accounts.yaml       # Account list and Git identity metadata
 ├── config.yaml         # Git scope, OAuth Client ID, and runtime settings
 ├── auth.yaml           # AES-GCM encrypted OAuth tokens (0600 permissions)
@@ -170,6 +170,19 @@ gha --config-dir "${HOME}/.config/gha-dev" list
 ```
 
 Configuration templates are available at [`configs/accounts.example.yaml`](configs/accounts.example.yaml) and [`configs/config.example.yaml`](configs/config.example.yaml).
+
+### Directory Bindings
+
+`config.yaml` can map workspace directories to an account alias under `directories`. `gha auto` uses the binding when the repository has no `origin` remote, or when the remote owner has no configured profile:
+
+```yaml
+default_scope: local
+directories:
+  ~/Code/work:      { account: work }
+  ~/Code/personal:  { account: personal }
+```
+
+The longest matching prefix wins, and matching is case-insensitive on Windows.
 
 ### Git Config Scope
 

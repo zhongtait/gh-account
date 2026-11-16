@@ -266,6 +266,44 @@ func TestSwitchUserSkipsUndecryptableCredential(t *testing.T) {
 	}
 }
 
+func TestLocalIdentityUsesStoredCredentialWithoutNetwork(t *testing.T) {
+	ctx := context.Background()
+	store := config.NewStore(t.TempDir())
+	c := NewOAuthClient(store, io.Discard, "id")
+	c.HTTP = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("LocalIdentity made a network request")
+		return nil, errors.New("unexpected request")
+	})}
+
+	if _, _, err := c.LocalIdentity(ctx); err == nil || !strings.Contains(err.Error(), "no active") {
+		t.Fatalf("empty store error = %v", err)
+	}
+
+	auth := config.DefaultAuth()
+	auth.Active = "ghe.example|alice"
+	auth.Credentials[auth.Active] = config.Credential{Hostname: "HTTPS://GHE.example/", Login: "Alice", AccessToken: "token"}
+	if err := store.SaveAuth(auth); err != nil {
+		t.Fatal(err)
+	}
+	login, host, err := c.LocalIdentity(ctx)
+	if err != nil || login != "Alice" || host != "ghe.example" {
+		t.Fatalf("LocalIdentity = %q %q %v", login, host, err)
+	}
+
+	auth.Active = "missing"
+	if err := store.SaveAuth(auth); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.LocalIdentity(ctx); err == nil || !strings.Contains(err.Error(), "credential is missing") {
+		t.Fatalf("missing credential error = %v", err)
+	}
+
+	writeMalformedAuth(t, store)
+	if _, _, err := c.LocalIdentity(ctx); err == nil || !strings.Contains(err.Error(), "load auth") {
+		t.Fatalf("malformed auth error = %v", err)
+	}
+}
+
 func TestHTTPErrorBranches(t *testing.T) {
 	ctx := context.Background()
 	c := NewOAuthClient(config.NewStore(t.TempDir()), io.Discard, "id")

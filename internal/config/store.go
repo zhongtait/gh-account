@@ -22,7 +22,11 @@ import (
 
 // Store loads and persists gha configuration files.
 type Store struct {
-	Dir                 string
+	Dir string
+	// Warning receives one-time non-fatal notices, such as credentials that
+	// could not be decrypted. It defaults to os.Stderr so embedded callers and
+	// tests can capture the output instead.
+	Warning             io.Writer
 	mu                  sync.RWMutex
 	warningMu           sync.Mutex
 	warnedUndecryptable map[string]struct{}
@@ -199,6 +203,10 @@ func (s *Store) warnUndecryptable(auth AuthFile) {
 	if len(auth.UndecryptableKeys) == 0 {
 		return
 	}
+	writer := s.Warning
+	if writer == nil {
+		writer = os.Stderr
+	}
 	s.warningMu.Lock()
 	defer s.warningMu.Unlock()
 	if s.warnedUndecryptable == nil {
@@ -208,7 +216,7 @@ func (s *Store) warnUndecryptable(auth AuthFile) {
 		if _, warned := s.warnedUndecryptable[key]; warned {
 			continue
 		}
-		fmt.Fprintf(os.Stderr, "warning: stored credential %q cannot be decrypted; run \"gha login\" to repair it\n", key)
+		fmt.Fprintf(writer, "warning: stored credential %q cannot be decrypted; run \"gha login\" to repair it\n", key)
 		s.warnedUndecryptable[key] = struct{}{}
 	}
 }

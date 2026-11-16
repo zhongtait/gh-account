@@ -169,7 +169,7 @@ GitHub Actions 的 [CI workflow](.github/workflows/ci.yml) 会在 Pull Request �
 
 ## 配置
 
-默认配置目录为 `~/.config/gha/`，包含：
+默认配置目录为 `~/.config/gha/`（Windows 下为 `%APPDATA%\gha`），包含：
 
 ```text
 ~/.config/gha/
@@ -189,6 +189,19 @@ gha --config-dir "${HOME}/.config/gha-dev" list
 ```
 
 示例配置见 [`configs/accounts.example.yaml`](configs/accounts.example.yaml) 和 [`configs/config.example.yaml`](configs/config.example.yaml)。
+
+### 目录绑定
+
+`config.yaml` 的 `directories` 可以把工作目录绑定到某个账号别名。当仓库没有 `origin` remote，或 remote 的 owner 没有对应账号时，`gha auto` 会使用该绑定：
+
+```yaml
+default_scope: local
+directories:
+  ~/Code/work:      { account: work }
+  ~/Code/personal:  { account: personal }
+```
+
+匹配时取最长前缀；Windows 下不区分大小写。
 
 ### Git 配置读取范围
 
@@ -334,7 +347,7 @@ gh-account/
 
 说明：`gha edit` 仍会调用用户主动配置的 `$EDITOR`/`$VISUAL`，这是编辑器集成，不参与 OAuth、Git 或账号切换流程。
 
-`gha auto` 不读取目录绑定来切换账号。它会读取当前仓库的 `origin`，例如 `https://github.com/zhongtait/gh-account.git` 会提取出 `github.com/zhongtait`，查找本地对应的 OAuth credential 和账号资料；如果没有本地登录 credential，则提示手动填写账号信息。
+`gha auto` 优先根据当前仓库的 `origin` 查找账号；没有 `origin`，或 remote owner 没有对应账号时，会使用目录绑定。选定账号没有本地 OAuth credential 时，可选择登录或手动填写账号信息；无 remote 的目录绑定直接同步已有账号资料。
 
 `gha use` 和 `gha auto` 还会为生效范围配置 Git credential helper。该 helper 从 `gha` 的加密凭据存储读取当前账号的 token，因此外部执行的 `git pull`、`git fetch` 和 `git push` 不会继续使用系统钥匙串中的其他 GitHub 账号。配置只保存 helper 命令和账号标识，不会把 token 写进 remote URL 或 Git 配置。
 

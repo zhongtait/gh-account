@@ -256,7 +256,7 @@ gha gh install                   # Force install / update managed GitHub CLI bin
 gha clone cli/cli                                      # Shorthand owner/repo clone
 gha clone cli/cli -a personal -d ./my-cli              # Specify account and destination directory
 gha clone https://github.com/OWNER/REPO.git            # Equivalent to gha git clone ...
-gha status                                       # Equivalent to gha git status
+gha git status                                   # Equivalent to git status in the repository
 gha push origin main                             # Equivalent to gha git push origin main
 gha commit -m "feat: updates"                    # Equivalent to gha git commit -m ...
 gha log -n 5                                     # Equivalent to gha git log -n 5
@@ -265,6 +265,7 @@ gha diff                                         # Equivalent to gha git diff
 # Run one-off Git command as a different account (without altering config)
 gha --account work push origin main
 gha git -a personal commit -m "feat: updates"
+gha git -a personal commit -a --dry-run           # Git's own -a is forwarded
 
 # GHA features accessible under `gha git`
 gha git use work                                 # Equivalent to gha use work
@@ -284,6 +285,8 @@ gha clone OWNER/PRIVATE_REPO -a personal
 # Clone repository with automatic account detection
 gha clone https://github.com/OWNER/PRIVATE_REPO.git
 ```
+
+For delegated Git and GitHub CLI commands, put `-a` / `--account` **before** the delegated command: `gha git -a work commit -a`, or `gha gh -a work pr list -a octocat`. All arguments after the delegated command, including flag values and `--`, are passed through unchanged. The managed `gha clone` / `gha git clone` command still accepts account and directory flags after the repository argument.
 
 `gha use` refreshes the HTTPS credential binding even when the profile prefers SSH, because existing remotes may still use HTTPS. SSH authentication continues to use SSH keys.
 

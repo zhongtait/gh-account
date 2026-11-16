@@ -275,7 +275,7 @@ gha gh install                 # 主动下载安装/重装 gha 托管的官方 G
 gha clone cli/cli                                      # 支持简写 owner/repo 克隆
 gha clone cli/cli -a personal -d ./my-cli              # 指定克隆账号与目标目录
 gha clone https://github.com/OWNER/REPO.git            # 等同于 gha git clone ...
-gha status                                       # 等同于 gha git status
+gha git status                                   # 等同于在仓库内执行 git status
 gha push origin main                             # 等同于 gha git push origin main
 gha commit -m "feat: hello"                      # 等同于 gha git commit -m ...
 gha log -n 5                                     # 等同于 gha git log -n 5
@@ -284,6 +284,7 @@ gha diff                                         # 等同于 gha git diff
 # 临时以指定账号身份执行任意 Git 操作（不污染全局配置）
 gha --account work push origin main
 gha git -a personal commit -m "feat: updates"
+gha git -a personal commit -a --dry-run           # 保留 Git 原生的 -a 参数
 
 # GHA 专属功能在 gha git 下同样可用
 gha git use work                                 # 等同于 gha use work
@@ -303,6 +304,8 @@ gha clone OWNER/PRIVATE_REPO -a personal
 # 自动选择账号（auto 可以省略）
 gha clone https://github.com/OWNER/PRIVATE_REPO.git
 ```
+
+透传 Git 和 GitHub CLI 命令时，账号参数 `-a` / `--account` 必须放在**被代理的命令之前**，例如 `gha git -a work commit -a` 或 `gha gh -a work pr list -a octocat`。命令之后的参数、参数值和 `--` 分隔符均原样传递。由 gha 管理的 `gha clone` / `gha git clone` 仍支持在仓库参数之后指定账号和目录。
 
 `gha clone` 需要系统中存在 `git` 可执行文件。HTTPS 克隆时，程序只在 Git
 进程中注入当前账号的 credential helper，不会把 access token 写入 remote URL；

@@ -64,9 +64,10 @@ func newGitCmd() *cobra.Command {
 	return cmd
 }
 
+// Only leading flags belong to gha. After the delegated command starts, flags
+// and their values belong to Git/gh (for example commit -a and pr list -a).
 func extractAccountFlag(args []string) (string, []string, error) {
 	var accountAlias string
-	var gitArgs []string
 
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -81,11 +82,11 @@ func extractAccountFlag(args []string) (string, []string, error) {
 		} else if strings.HasPrefix(arg, "-a=") {
 			accountAlias = strings.TrimPrefix(arg, "-a=")
 		} else {
-			gitArgs = append(gitArgs, arg)
+			return strings.TrimSpace(accountAlias), args[i:], nil
 		}
 	}
 
-	return strings.TrimSpace(accountAlias), gitArgs, nil
+	return strings.TrimSpace(accountAlias), nil, nil
 }
 
 func runGitCloneWrapper(cmd *cobra.Command, accountAlias string, cloneArgs []string) error {
@@ -93,25 +94,25 @@ func runGitCloneWrapper(cmd *cobra.Command, accountAlias string, cloneArgs []str
 		return newCloneCmd().Help()
 	}
 
-	finalArgs := cloneArgs
-	if accountAlias != "" {
-		hasExplicit := false
-		for _, a := range cloneArgs {
-			if strings.EqualFold(a, "use") {
-				hasExplicit = true
-				break
-			}
-		}
-		if !hasExplicit {
-			finalArgs = append(append([]string{}, cloneArgs...), "use", accountAlias)
-		}
-	}
-
 	cloneCmd := newCloneCmd()
 	cloneCmd.SetContext(commandContext(cmd))
 	cloneCmd.SetIn(deps.Stdin)
 	cloneCmd.SetOut(deps.Stdout)
 	cloneCmd.SetErr(deps.Stderr)
+	// Clone is a gha command, so use its parser for interspersed -a/--account
+	// and -d/--dir flags, including values and the -- separator.
+	if err := cloneCmd.ParseFlags(cloneArgs); err != nil {
+		if errors.Is(err, pflag.ErrHelp) {
+			return cloneCmd.Help()
+		}
+		return err
+	}
+	finalArgs := cloneCmd.Flags().Args()
+	if accountAlias != "" && !cloneCmd.Flags().Changed("account") && !(len(finalArgs) == 3 && strings.EqualFold(finalArgs[1], "use")) {
+		if err := cloneCmd.Flags().Set("account", accountAlias); err != nil {
+			return err
+		}
+	}
 
 	if err := cloneCmd.Args(cloneCmd, finalArgs); err != nil {
 		return err

@@ -6,12 +6,116 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/zhongtait/gh-account/internal/config"
 	"github.com/zhongtait/gh-account/internal/remote"
 )
+
+func TestGitCmdCloneForwardsDirFlag(t *testing.T) {
+	store, _, _, _ := commandSetup(t)
+	oldRun := cloneRun
+	oldDest := cloneDestinationFor
+	oldCustom := cloneCustomDest
+	t.Cleanup(func() {
+		cloneRun = oldRun
+		cloneDestinationFor = oldDest
+		cloneCustomDest = oldCustom
+	})
+
+	if err := store.UpsertAccount("personal", config.Account{
+		Login:    "personal",
+		Hostname: "github.com",
+		GitName:  "Personal User",
+		Email:    "personal@example.com",
+		Protocol: "https",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var usedDestination string
+	cloneRun = func(context.Context, string, remote.Info, config.Account) error { return nil }
+	destination := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(destination, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(destination, ".git", "config"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cloneDestinationFor = func(_ string, _ remote.Info) (string, error) {
+		usedDestination = cloneCustomDest
+		return destination, nil
+	}
+
+	for _, args := range [][]string{
+		{"clone", "https://github.com/personal/repo.git", "-d", "custom-dir"},
+		{"clone", "https://github.com/personal/repo.git", "--dir", "custom-dir"},
+		{"clone", "https://github.com/personal/repo.git", "--dir=custom-dir"},
+		{"clone", "-d=custom-dir", "https://github.com/personal/repo.git"},
+		{"clone", "https://github.com/personal/repo.git", "-a", "personal", "-d", "custom-dir"},
+		{"clone", "--account=personal", "https://github.com/personal/repo.git", "--dir=custom-dir"},
+	} {
+		usedDestination = ""
+		if err := newGitCmd().RunE(newGitCmd(), args); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		if usedDestination != "custom-dir" {
+			t.Fatalf("%v: destination = %q", args, usedDestination)
+		}
+	}
+
+	for _, flag := range []string{"-d", "--dir", "-a", "--account"} {
+		if err := newGitCmd().RunE(newGitCmd(), []string{"clone", "repo", flag}); err == nil {
+			t.Fatalf("missing %s value accepted", flag)
+		}
+	}
+}
+
+func TestGitPassthroughPreservesNativeFlagsAndValues(t *testing.T) {
+	store, _, _, _ := commandSetup(t)
+	addAlice(t, store)
+	originalExec := gitExec
+	t.Cleanup(func() { gitExec = originalExec })
+	var executed []string
+	gitExec = func(_ context.Context, _ io.Reader, _, _ io.Writer, args ...string) error {
+		executed = args
+		return nil
+	}
+	for _, tc := range []struct {
+		name    string
+		args    []string
+		want    []string
+		account bool
+	}{
+		{"native short flag", []string{"git", "commit", "-a", "--dry-run"}, []string{"commit", "-a", "--dry-run"}, false},
+		{"shorthand", []string{"commit", "-a", "--dry-run"}, []string{"commit", "-a", "--dry-run"}, false},
+		{"native trailing flag", []string{"git", "branch", "-a"}, []string{"branch", "-a"}, false},
+		{"leading account", []string{"git", "-a", "alice", "commit", "-a", "--dry-run"}, []string{"commit", "-a", "--dry-run"}, true},
+		{"long account", []string{"--account=alice", "commit", "-a", "--dry-run"}, []string{"commit", "-a", "--dry-run"}, true},
+		{"message is a flag", []string{"git", "commit", "-m", "--account", "--dry-run"}, []string{"commit", "-m", "--account", "--dry-run"}, false},
+		{"path separator", []string{"git", "diff", "--", "-a", "--account=alice"}, []string{"diff", "--", "-a", "--account=alice"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			executed = nil
+			args := append([]string{"--config-dir", store.Dir}, tc.args...)
+			if err := ExecuteArgs(args); err != nil {
+				t.Fatal(err)
+			}
+			forwarded := executed
+			if tc.account {
+				if len(executed) <= len(tc.want) || executed[0] != "-c" || !strings.HasPrefix(executed[1], "user.name=") {
+					t.Fatalf("account was not applied: %v", executed)
+				}
+				forwarded = executed[len(executed)-len(tc.want):]
+			}
+			if !reflect.DeepEqual(forwarded, tc.want) {
+				t.Fatalf("forwarded %q, want %q", forwarded, tc.want)
+			}
+		})
+	}
+}
 
 func TestRunSystemGit(t *testing.T) {
 	// Tests the real runSystemGit function using a safe flag

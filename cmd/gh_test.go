@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -13,6 +14,31 @@ import (
 	"github.com/zhongtait/gh-account/internal/ghman"
 	"github.com/zhongtait/gh-account/internal/utils"
 )
+
+func TestGHPassthroughPreservesNativeAccountLikeFlags(t *testing.T) {
+	commandSetup(t)
+	originalEnsure, originalExec := ghEnsure, ghExec
+	t.Cleanup(func() { ghEnsure, ghExec = originalEnsure, originalExec })
+	ghEnsure = func(context.Context) (string, error) { return "gh", nil }
+	var executed []string
+	ghExec = func(_ context.Context, _ string, _ io.Reader, _, _ io.Writer, _ []string, args ...string) error {
+		executed = args
+		return nil
+	}
+	for _, args := range [][]string{
+		{"pr", "list", "-a", "octocat"},
+		{"pr", "create", "--title", "--account", "--body", "-a"},
+		{"extension", "exec", "example", "--", "--account=alice"},
+	} {
+		command := newGHCmd()
+		if err := command.RunE(command, args); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(executed, args) {
+			t.Fatalf("forwarded %q, want %q", executed, args)
+		}
+	}
+}
 
 func TestRunSystemGH(t *testing.T) {
 	_ = runSystemGH(context.Background(), "gh", strings.NewReader(""), io.Discard, io.Discard, []string{"FOO=BAR"}, "--version")

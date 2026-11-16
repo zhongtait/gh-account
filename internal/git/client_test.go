@@ -111,7 +111,11 @@ func TestNativeClientCredentialHelperReplacesExistingHelpers(t *testing.T) {
 		t.Fatal(err)
 	}
 	configPath := filepath.Join(gitDir, "config")
-	initial := "[credential]\n\thelper = osxkeychain\n\thelper = old-helper\n\n[remote \"origin\"]\n\turl = https://github.com/a/b.git\n"
+	includedPath := filepath.Join(root, "included.gitconfig")
+	if err := os.WriteFile(includedPath, []byte("[credential]\n\thelper = included-helper\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	initial := "[credential]\n\thelper = osxkeychain\n\thelper = old-helper\n\n[include]\n\tpath = " + filepath.ToSlash(includedPath) + "\n\n[remote \"origin\"]\n\turl = https://github.com/a/b.git\n"
 	if err := os.WriteFile(configPath, []byte(initial), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -134,6 +138,20 @@ func TestNativeClientCredentialHelperReplacesExistingHelpers(t *testing.T) {
 	}
 	if !strings.Contains(got, "account-key = github.com|personal-user") {
 		t.Fatalf("credential account key was not saved:\n%s", got)
+	}
+	resolved, err := readGitConfigResolved(configPath, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	helpers := resolved.getAll("credential.helper")
+	wantHelpers := []string{"included-helper", "", "!'gha' credential-helper"}
+	if len(helpers) != len(wantHelpers) {
+		t.Fatalf("resolved credential helpers = %#v, want %#v", helpers, wantHelpers)
+	}
+	for i := range wantHelpers {
+		if helpers[i] != wantHelpers[i] {
+			t.Fatalf("resolved credential helpers = %#v, want %#v", helpers, wantHelpers)
+		}
 	}
 }
 

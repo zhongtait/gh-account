@@ -190,6 +190,12 @@ gha --config-dir "${HOME}/.config/gha-dev" list
 
 示例配置见 [`configs/accounts.example.yaml`](configs/accounts.example.yaml) 和 [`configs/config.example.yaml`](configs/config.example.yaml)。
 
+### Git 配置读取范围
+
+`gha` 直接解析普通 Git 配置和 `[include]` 文件；所选配置包含 `includeIf` 时，会调用已安装的 `git` 解析条件。身份读取使用选定的 local 或 global 范围，**不会**合并系统级配置（`/etc/gitconfig`）及所有层级来计算实际提交身份。
+
+重写 remote URL（`gha use --update-remote` 或 `update_remote: true`）需要 Git 2.46+。程序在所有 include 之后清空旧 URL 列表，再写入选定地址，避免继承的旧地址成为额外推送目标。显式设置的 `remote.<name>.pushurl` 会保留。旧版 Git 会在写入 remote 配置前被拒绝。
+
 ## 常用命令
 
 | 命令 | 作用 |
@@ -332,7 +338,7 @@ gh-account/
 
 `gha use` 和 `gha auto` 还会为生效范围配置 Git credential helper。该 helper 从 `gha` 的加密凭据存储读取当前账号的 token，因此外部执行的 `git pull`、`git fetch` 和 `git push` 不会继续使用系统钥匙串中的其他 GitHub 账号。配置只保存 helper 命令和账号标识，不会把 token 写进 remote URL 或 Git 配置。
 
-这套认证同步适用于 HTTPS remote。SSH remote 仍由 SSH key、`ssh-agent` 或 `core.sshCommand` 决定，不能通过 GitHub OAuth token 切换。
+即使账号偏好 SSH，`gha use` 也会更新 HTTPS 凭据绑定，因为现有 remote 可能仍使用 HTTPS。SSH remote 的认证仍由 SSH key、`ssh-agent` 或 `core.sshCommand` 决定，不能通过 GitHub OAuth token 切换。
 
 未登录时会提供两个选项：
 

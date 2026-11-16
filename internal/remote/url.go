@@ -102,11 +102,21 @@ func trimGitSuffix(path string) string {
 
 // RewriteOwner rebuilds a remote URL with a new owner while preserving protocol/host/repo.
 func RewriteOwner(raw, newOwner string) (string, error) {
+	return Rewrite(raw, newOwner, "")
+}
+
+// Rewrite rebuilds a remote URL with a new owner and, when protocol is
+// non-empty, a new protocol. Letting the remote package perform the rewrite
+// keeps URL construction (including SSH user and port handling) in one place.
+func Rewrite(raw, newOwner, protocol string) (string, error) {
 	info, err := Parse(raw)
 	if err != nil {
 		return "", err
 	}
 	info.Owner = newOwner
+	if trimmed := strings.TrimSpace(protocol); trimmed != "" {
+		info.Protocol = strings.ToLower(trimmed)
+	}
 	return Build(info)
 }
 

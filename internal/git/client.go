@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -28,8 +30,13 @@ var (
 	gitOpenFile    = func(name string, flag int, perm os.FileMode) (gitLockFile, error) {
 		return os.OpenFile(name, flag, perm)
 	}
-	gitRemove = os.Remove
-	gitRename = os.Rename
+	gitRemove        = os.Remove
+	gitRename        = os.Rename
+	gitConfigCommand = func(ctx context.Context, dir string, args ...string) ([]byte, error) {
+		command := exec.CommandContext(ctx, "git", args...)
+		command.Dir = dir
+		return command.Output()
+	}
 )
 
 // Scope controls whether git config is written locally or globally.
@@ -63,12 +70,13 @@ type CredentialClient interface {
 }
 
 // NativeClient implements the subset of Git repository/config operations
-// required by gha without invoking the git executable.
+// required by gha. It reads and writes ordinary config files directly, and
+// invokes Git to resolve conditional includes and check URL reset support.
 type NativeClient struct {
 	Dir string
 }
 
-// NewNativeClient creates a pure Go Git client rooted at dir.
+// NewNativeClient creates a Git client rooted at dir.
 func NewNativeClient(dir string) *NativeClient {
 	if dir == "" {
 		dir, _ = os.Getwd()
@@ -94,20 +102,34 @@ func (c *NativeClient) TopLevel(ctx context.Context) (string, error) {
 	return root, nil
 }
 
-// GetIdentity reads user.name and user.email for the given scope.
+// GetIdentity reads user.name and user.email for the given scope. It resolves
+// [include] directives in the selected config file the way Git does, so an
+// identity inherited from an included file is reported instead of "(unset)".
 func (c *NativeClient) GetIdentity(ctx context.Context, scope Scope) (Identity, error) {
-	file, err := c.loadConfig(scope)
+	file, err := c.loadConfigResolved(scope)
 	if err != nil {
 		return Identity{}, fmt.Errorf("load git config: %w", err)
 	}
-	return Identity{Name: file.get("user.name"), Email: file.get("user.email")}, nil
+	identity := Identity{Name: file.get("user.name"), Email: file.get("user.email")}
+	if file.hasConditionalIncludes() {
+		nameValues, err := c.configValuesWithGit(ctx, scope, "user.name")
+		if err != nil {
+			return Identity{}, err
+		}
+		emailValues, err := c.configValuesWithGit(ctx, scope, "user.email")
+		if err != nil {
+			return Identity{}, err
+		}
+		identity.Name = lastValue(nameValues)
+		identity.Email = lastValue(emailValues)
+	}
+	return identity, nil
 }
 
 // SetIdentity writes user.name and user.email for the given scope.
 func (c *NativeClient) SetIdentity(ctx context.Context, scope Scope, identity Identity) error {
 	if err := c.updateConfig(scope, func(file *gitConfig) {
-		file.set("user.name", identity.Name)
-		file.set("user.email", identity.Email)
+		file.setIdentity(identity)
 	}); err != nil {
 		return fmt.Errorf("save git config: %w", err)
 	}
@@ -125,31 +147,45 @@ func (c *NativeClient) SetCredentialHelper(ctx context.Context, scope Scope, com
 		return errors.New("credential account key is required")
 	}
 	if err := c.updateConfig(scope, func(file *gitConfig) {
-		file.setMulti("credential.helper", []string{"", strings.TrimSpace(command)})
-		file.set("gha.account-key", strings.TrimSpace(accountKey))
+		// The empty helper must come after includes in this config scope so it
+		// also resets helpers contributed by an included file. Append both keys
+		// after every include so a later include cannot override the account.
+		file.setMultiAfterIncludes("credential.helper", []string{"", strings.TrimSpace(command)})
+		file.removeAll("gha.account-key")
+		file.appendSection("gha", "account-key = "+quoteGitValue(strings.TrimSpace(accountKey)))
 	}); err != nil {
 		return fmt.Errorf("save git config: %w", err)
 	}
 	return nil
 }
 
-// GetRemoteURL returns a remote URL.
+// GetRemoteURL returns the first remote URL after the last empty URL entry.
+// Git treats an empty entry as a reset of URLs inherited from earlier config.
 func (c *NativeClient) GetRemoteURL(ctx context.Context, name string) (string, error) {
 	if name == "" {
 		name = "origin"
 	}
-	file, err := c.loadConfig(ScopeLocal)
+	file, err := c.loadConfigResolved(ScopeLocal)
 	if err != nil {
 		return "", fmt.Errorf("load git config: %w", err)
 	}
-	value := file.get("remote." + strings.ToLower(strings.TrimSpace(name)) + ".url")
+	key := "remote." + strings.ToLower(strings.TrimSpace(name)) + ".url"
+	values := file.getAll(key)
+	if file.hasConditionalIncludes() {
+		values, err = c.configValuesWithGit(ctx, ScopeLocal, key)
+		if err != nil {
+			return "", err
+		}
+	}
+	value := firstRemoteURL(values)
 	if value == "" {
 		return "", fmt.Errorf("remote %q not found", name)
 	}
 	return value, nil
 }
 
-// SetRemoteURL updates a remote URL.
+// SetRemoteURL replaces a remote's URL list, including inherited URLs. Explicit
+// pushurl entries remain unchanged, as with git remote set-url without --push.
 func (c *NativeClient) SetRemoteURL(ctx context.Context, name, remoteURL string) error {
 	if name == "" {
 		name = "origin"
@@ -161,12 +197,35 @@ func (c *NativeClient) SetRemoteURL(ctx context.Context, name, remoteURL string)
 	if strings.TrimSpace(remoteURL) == "" {
 		return errors.New("remote URL is required")
 	}
+	if err := requireRemoteURLReset(ctx); err != nil {
+		return err
+	}
 	if err := c.updateConfig(ScopeLocal, func(file *gitConfig) {
-		file.set("remote."+strings.ToLower(name)+".url", strings.TrimSpace(remoteURL))
+		// Reset after all includes: prepending the new URL changes fetches but
+		// leaves every inherited URL as an additional implicit push target.
+		file.setMultiAfterIncludes("remote."+strings.ToLower(name)+".url", []string{"", strings.TrimSpace(remoteURL)})
 	}); err != nil {
 		return fmt.Errorf("save git config: %w", err)
 	}
 	return nil
+}
+
+// Git before 2.46 treats an empty URL as another target instead of a reset.
+// Check before writing so older installations cannot acquire a broken remote.
+func requireRemoteURLReset(ctx context.Context) error {
+	output, err := gitConfigCommand(ctx, "", "--version")
+	if err != nil {
+		return fmt.Errorf("rewriting remote URLs requires Git 2.46 or newer: %w", err)
+	}
+	match := gitVersionPattern.FindStringSubmatch(string(output))
+	if match != nil {
+		major, _ := strconv.Atoi(match[1])
+		minor, _ := strconv.Atoi(match[2])
+		if major > 2 || major == 2 && minor >= 46 {
+			return nil
+		}
+	}
+	return fmt.Errorf("rewriting remote URLs requires Git 2.46 or newer; found %q", strings.TrimSpace(string(output)))
 }
 
 // CurrentBranch returns the symbolic branch from HEAD. Detached HEAD returns
@@ -274,10 +333,71 @@ func (c *NativeClient) loadConfig(scope Scope) (gitConfig, error) {
 	return config, nil
 }
 
-func (c *NativeClient) saveConfig(scope Scope, file gitConfig) error {
-	return c.updateConfig(scope, func(current *gitConfig) { *current = file })
+// loadConfigResolved reads the scope's config and inlines the files named by
+// its unconditional [include] directives. Conditional includes are queried
+// through Git itself so condition matching follows Git's current worktree and
+// branch semantics.
+func (c *NativeClient) loadConfigResolved(scope Scope) (gitConfig, error) {
+	path, err := c.configPath(scope)
+	if err != nil {
+		return gitConfig{}, fmt.Errorf("get config path: %w", err)
+	}
+	return readGitConfigResolved(path, 0)
 }
 
+// configValuesWithGit asks Git to resolve a key when the selected config tree
+// contains conditional includes. Git owns the full includeIf condition syntax,
+// including gitdir, worktree, onbranch, and hasconfig conditions.
+func (c *NativeClient) configValuesWithGit(ctx context.Context, scope Scope, key string) ([]string, error) {
+	var args []string
+	switch scope {
+	case ScopeLocal:
+		args = []string{"config", "--local", "--includes", "--null", "--get-all", key}
+	case ScopeGlobal:
+		args = []string{"config", "--global", "--includes", "--null", "--get-all", key}
+	default:
+		return nil, fmt.Errorf("unsupported git scope %q", scope)
+	}
+	output, err := gitConfigCommand(ctx, c.Dir, args...)
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			if exitErr.ExitCode() == 1 && len(output) == 0 {
+				return nil, nil
+			}
+			if detail := strings.TrimSpace(string(exitErr.Stderr)); detail != "" {
+				return nil, fmt.Errorf("resolve conditional git config %s: %s", key, detail)
+			}
+		}
+		return nil, fmt.Errorf("resolve conditional git config %s: %w", key, err)
+	}
+	if len(output) == 0 {
+		return nil, nil
+	}
+	values := strings.Split(string(output), "\x00")
+	if values[len(values)-1] == "" {
+		values = values[:len(values)-1]
+	}
+	return values, nil
+}
+
+func firstRemoteURL(values []string) string {
+	first := ""
+	for _, value := range values {
+		if value == "" {
+			first = ""
+		} else if first == "" {
+			first = value
+		}
+	}
+	return first
+}
+
+func lastValue(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return values[len(values)-1]
+}
 func (c *NativeClient) updateConfig(scope Scope, update func(*gitConfig)) error {
 	path, err := c.configPath(scope)
 	if err != nil {
@@ -358,8 +478,9 @@ type gitConfig struct {
 }
 
 var (
-	sectionPattern = regexp.MustCompile(`^\s*\[([^]]+)\]\s*$`)
-	keyPattern     = regexp.MustCompile(`^([A-Za-z0-9_.-]+)\s*(?:=|\s+)\s*(.*?)\s*$`)
+	sectionPattern    = regexp.MustCompile(`^\s*\[([^]]+)\]\s*$`)
+	keyPattern        = regexp.MustCompile(`^([A-Za-z0-9_.-]+)\s*(?:=|\s+)\s*(.*?)\s*$`)
+	gitVersionPattern = regexp.MustCompile(`^git version ([0-9]+)\.([0-9]+)\.`)
 )
 
 func readGitConfig(path string) (gitConfig, error) {
@@ -379,6 +500,93 @@ func readGitConfig(path string) (gitConfig, error) {
 		return gitConfig{}, fmt.Errorf("scan config file: %w", err)
 	}
 	return gitConfig{lines: lines}, nil
+}
+
+// maxIncludeDepth bounds [include] recursion so a self-including or mutually
+// including config file cannot loop forever.
+const maxIncludeDepth = 10
+
+// readGitConfigResolved reads path and recursively inlines the files named by
+// [include] directives. Values from included files appear at the point of the
+// directive, so later entries (including the including file's own keys) keep
+// Git's last-value-wins behavior. Missing include targets are ignored: Git
+// treats them as empty during reads.
+func readGitConfigResolved(path string, depth int) (gitConfig, error) {
+	file, err := readGitConfig(path)
+	if err != nil {
+		return gitConfig{}, fmt.Errorf("read git config from %s: %w", path, err)
+	}
+	if depth >= maxIncludeDepth {
+		return file, nil
+	}
+	resolved := gitConfig{lines: make([]string, 0, len(file.lines))}
+	section := ""
+	for _, line := range file.lines {
+		if match := sectionPattern.FindStringSubmatch(line); match != nil {
+			section = canonicalSection(match[1])
+			resolved.lines = append(resolved.lines, line)
+			continue
+		}
+		trimmed := strings.TrimSpace(line)
+		keyMatch := keyPattern.FindStringSubmatch(trimmed)
+		if section != "include" || keyMatch == nil || strings.ToLower(keyMatch[1]) != "path" {
+			resolved.lines = append(resolved.lines, line)
+			continue
+		}
+		includePath := unquoteGitValue(keyMatch[2])
+		if includePath == "" {
+			continue
+		}
+		if includePath == "~" || strings.HasPrefix(includePath, "~/") || strings.HasPrefix(includePath, `~\`) {
+			expanded, expandErr := gitExpandHome(includePath)
+			if expandErr != nil {
+				resolved.lines = append(resolved.lines, line)
+				continue
+			}
+			includePath = expanded
+		}
+		if !filepath.IsAbs(includePath) {
+			includePath = filepath.Join(filepath.Dir(path), includePath)
+		}
+		included, includeErr := readGitConfigResolved(includePath, depth+1)
+		if includeErr != nil {
+			// A missing or unreadable include is not fatal for reads: Git
+			// simply contributes no values from it.
+			continue
+		}
+		resolved.lines = append(resolved.lines, included.lines...)
+	}
+	return resolved, nil
+}
+
+func gitExpandHome(path string) (string, error) {
+	home, err := gitUserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	if path == "~" {
+		return home, nil
+	}
+	return filepath.Join(home, path[2:]), nil
+}
+
+func (f gitConfig) getAll(wanted string) []string {
+	section := ""
+	var values []string
+	for _, line := range f.lines {
+		if match := sectionPattern.FindStringSubmatch(line); match != nil {
+			section = canonicalSection(match[1])
+			continue
+		}
+		match := keyPattern.FindStringSubmatch(strings.TrimSpace(line))
+		if match == nil || strings.HasPrefix(strings.TrimSpace(line), "#") || strings.HasPrefix(strings.TrimSpace(line), ";") {
+			continue
+		}
+		if section+"."+strings.ToLower(match[1]) == strings.ToLower(wanted) {
+			values = append(values, unquoteGitValue(match[2]))
+		}
+	}
+	return values
 }
 
 func (f gitConfig) get(wanted string) string {
@@ -425,6 +633,142 @@ func (f *gitConfig) set(wanted, value string) {
 		f.lines = append(f.lines, "")
 	}
 	f.lines = append(f.lines, "["+formatSection(section)+"]", formatted)
+}
+
+// mustAppendAfterIncludes reports whether any of the given keys currently sit
+// before the last [include] or [includeIf] path. In that position an included
+// file could override them, so a plain in-place update would not take effect.
+func (f *gitConfig) mustAppendAfterIncludes(keys ...string) bool {
+	lastInclude := f.lastIncludePathIndex()
+	if lastInclude < 0 {
+		return false
+	}
+	for _, key := range keys {
+		if f.lastKeyIndex(key) < lastInclude {
+			return true
+		}
+	}
+	return false
+}
+
+// appendSection appends a new section, and its entries, at the end of the
+// file. Writing it last makes the values win over anything an include
+// directive contributed earlier.
+func (f *gitConfig) appendSection(section string, entries ...string) {
+	if len(f.lines) > 0 && strings.TrimSpace(f.lines[len(f.lines)-1]) != "" {
+		f.lines = append(f.lines, "")
+	}
+	f.lines = append(f.lines, "["+formatSection(section)+"]")
+	f.lines = append(f.lines, entries...)
+}
+
+// setIdentity makes the selected identity effective when the config contains
+// include directives. An included file is read at the directive's position,
+// so an earlier user.name or user.email in the parent file can be overridden
+// by the include. In that case append one parent [user] section after all
+// includes; subsequent updates will replace these last values in place.
+func (f *gitConfig) setIdentity(identity Identity) {
+	if f.mustAppendAfterIncludes("user.name", "user.email") {
+		f.appendSection("user",
+			"name = "+quoteGitValue(identity.Name),
+			"email = "+quoteGitValue(identity.Email),
+		)
+		return
+	}
+	f.set("user.name", identity.Name)
+	f.set("user.email", identity.Email)
+}
+
+func (f *gitConfig) lastIncludePathIndex() int {
+	section := ""
+	last := -1
+	for index, line := range f.lines {
+		if match := sectionPattern.FindStringSubmatch(line); match != nil {
+			section = match[1]
+			continue
+		}
+		match := keyPattern.FindStringSubmatch(strings.TrimSpace(line))
+		if isIncludeSection(section) && match != nil && strings.EqualFold(match[1], "path") && unquoteGitValue(match[2]) != "" {
+			last = index
+		}
+	}
+	return last
+}
+
+func isIncludeSection(section string) bool {
+	section = canonicalSection(section)
+	return section == "include" || strings.HasPrefix(section, "includeif.")
+}
+
+func (f *gitConfig) lastKeyIndex(wanted string) int {
+	section := ""
+	last := -1
+	for index, line := range f.lines {
+		if match := sectionPattern.FindStringSubmatch(line); match != nil {
+			section = canonicalSection(match[1])
+			continue
+		}
+		match := keyPattern.FindStringSubmatch(strings.TrimSpace(line))
+		if match != nil && section+"."+strings.ToLower(match[1]) == strings.ToLower(wanted) {
+			last = index
+		}
+	}
+	return last
+}
+
+// keyIndices returns every line index that defines wanted, in file order.
+func (f *gitConfig) keyIndices(wanted string) []int {
+	section := ""
+	var indices []int
+	for index, line := range f.lines {
+		if match := sectionPattern.FindStringSubmatch(line); match != nil {
+			section = canonicalSection(match[1])
+			continue
+		}
+		match := keyPattern.FindStringSubmatch(strings.TrimSpace(line))
+		if match != nil && section+"."+strings.ToLower(match[1]) == strings.ToLower(wanted) {
+			indices = append(indices, index)
+		}
+	}
+	return indices
+}
+
+func (f gitConfig) hasConditionalIncludes() bool {
+	for _, line := range f.lines {
+		match := sectionPattern.FindStringSubmatch(line)
+		if match != nil && strings.HasPrefix(canonicalSection(match[1]), "includeif.") {
+			return true
+		}
+	}
+	return false
+}
+
+// dropEmptySections removes section headers that no longer contain any keys,
+// so rewriting a key does not leave a dangling "[remote "origin"]" behind.
+func dropEmptySections(lines []string) []string {
+	result := make([]string, 0, len(lines))
+	for index, line := range lines {
+		if sectionPattern.MatchString(line) {
+			hasKey := false
+			for _, next := range lines[index+1:] {
+				if sectionPattern.MatchString(next) {
+					break
+				}
+				// Preserve any non-comment content, including valueless boolean
+				// keys and syntax the lightweight parser does not understand.
+				trimmed := strings.TrimSpace(next)
+				if trimmed != "" && !strings.HasPrefix(trimmed, "#") && !strings.HasPrefix(trimmed, ";") {
+					hasKey = true
+					break
+				}
+			}
+			if !hasKey {
+				continue
+			}
+		}
+		result = append(result, line)
+	}
+	return result
 }
 
 func (f *gitConfig) setMulti(wanted string, values []string) {
@@ -481,6 +825,40 @@ func (f *gitConfig) setMulti(wanted string, values []string) {
 	f.lines = append(f.lines, make([]string, len(formatted))...)
 	copy(f.lines[insertAt+len(formatted):], f.lines[insertAt:len(f.lines)-len(formatted)])
 	copy(f.lines[insertAt:insertAt+len(formatted)], formatted)
+}
+
+// setMultiAfterIncludes removes the key's definitions in this file, then adds
+// the replacement values at EOF. This is needed for credential.helper: its
+// empty value resets every helper accumulated before it, including helpers
+// supplied by included files.
+func (f *gitConfig) setMultiAfterIncludes(wanted string, values []string) {
+	f.removeAll(wanted)
+	parts := strings.Split(wanted, ".")
+	section := strings.Join(parts[:len(parts)-1], ".")
+	key := parts[len(parts)-1]
+	entries := make([]string, 0, len(values))
+	for _, value := range values {
+		entries = append(entries, key+" = "+quoteGitValue(value))
+	}
+	f.appendSection(section, entries...)
+}
+
+func (f *gitConfig) removeAll(wanted string) {
+	indices := f.keyIndices(wanted)
+	if len(indices) == 0 {
+		return
+	}
+	remove := make(map[int]struct{}, len(indices))
+	for _, index := range indices {
+		remove[index] = struct{}{}
+	}
+	filtered := make([]string, 0, len(f.lines)-len(indices))
+	for index, line := range f.lines {
+		if _, drop := remove[index]; !drop {
+			filtered = append(filtered, line)
+		}
+	}
+	f.lines = dropEmptySections(filtered)
 }
 
 func canonicalSection(section string) string {

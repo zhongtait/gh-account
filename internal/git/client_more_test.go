@@ -229,16 +229,16 @@ func TestGitConfigMissingRemoteAndGlobalErrors(t *testing.T) {
 	if _, err := client.GetIdentity(context.Background(), ScopeGlobal); err == nil {
 		t.Fatal("GetIdentity read a directory as global config")
 	}
-	if err := client.saveConfig(Scope("bad"), gitConfig{}); err == nil {
-		t.Fatal("saveConfig accepted invalid scope")
+	if _, err := client.GetIdentity(context.Background(), Scope("bad")); err == nil {
+		t.Fatal("GetIdentity accepted invalid scope")
 	}
 	parentFile := filepath.Join(t.TempDir(), "parent")
 	if err := os.WriteFile(parentFile, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(parentFile, "config"))
-	if err := client.saveConfig(ScopeGlobal, gitConfig{}); err == nil {
-		t.Fatal("saveConfig created a directory below a file")
+	if err := client.SetIdentity(context.Background(), ScopeGlobal, Identity{Name: "A", Email: "a@b"}); err == nil {
+		t.Fatal("SetIdentity created a directory below a file")
 	}
 	t.Setenv("GIT_CONFIG_GLOBAL", "")
 	t.Setenv("XDG_CONFIG_HOME", "")

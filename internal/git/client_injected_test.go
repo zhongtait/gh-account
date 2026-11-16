@@ -87,16 +87,16 @@ func TestInjectedRepositoryAndPathErrors(t *testing.T) {
 	}
 }
 
-func TestInjectedSaveConfigErrors(t *testing.T) {
+func TestInjectedUpdateConfigErrors(t *testing.T) {
 	restoreGitHooks(t)
 	c := NewNativeClient(t.TempDir())
 	path := filepath.Join(t.TempDir(), "config")
 	t.Setenv("GIT_CONFIG_GLOBAL", path)
-	file := gitConfig{lines: []string{"[user]", "name = Alice"}}
+	noop := func(*gitConfig) {}
 
 	originalMkdir := gitMkdirAll
 	gitMkdirAll = func(string, os.FileMode) error { return errors.New("mkdir") }
-	if err := c.saveConfig(ScopeGlobal, file); err == nil || !strings.Contains(err.Error(), "create config directory") {
+	if err := c.updateConfig(ScopeGlobal, noop); err == nil || !strings.Contains(err.Error(), "create config directory") {
 		t.Fatal(err)
 	}
 	gitMkdirAll = originalMkdir
@@ -108,7 +108,7 @@ func TestInjectedSaveConfigErrors(t *testing.T) {
 		}
 		return originalStat(name)
 	}
-	if err := c.saveConfig(ScopeGlobal, file); err == nil || !strings.Contains(err.Error(), "stat git config") {
+	if err := c.updateConfig(ScopeGlobal, noop); err == nil || !strings.Contains(err.Error(), "stat git config") {
 		t.Fatal(err)
 	}
 	gitStat = originalStat
@@ -120,14 +120,14 @@ func TestInjectedSaveConfigErrors(t *testing.T) {
 		}
 		return originalRead(name)
 	}
-	if err := c.saveConfig(ScopeGlobal, file); err == nil || !strings.Contains(err.Error(), "read git config") {
+	if err := c.updateConfig(ScopeGlobal, noop); err == nil || !strings.Contains(err.Error(), "read git config") {
 		t.Fatal(err)
 	}
 	gitReadFile = originalRead
 
 	originalOpen := gitOpenFile
 	gitOpenFile = func(string, int, os.FileMode) (gitLockFile, error) { return nil, errors.New("open") }
-	if err := c.saveConfig(ScopeGlobal, file); err == nil || !strings.Contains(err.Error(), "create git config lock") {
+	if err := c.updateConfig(ScopeGlobal, noop); err == nil || !strings.Contains(err.Error(), "create git config lock") {
 		t.Fatal(err)
 	}
 	gitOpenFile = originalOpen
@@ -144,13 +144,13 @@ func TestInjectedSaveConfigErrors(t *testing.T) {
 	}
 	for _, tc := range cases {
 		gitOpenFile = func(string, int, os.FileMode) (gitLockFile, error) { return tc.lock, nil }
-		if err := c.saveConfig(ScopeGlobal, file); err == nil || !strings.Contains(err.Error(), tc.want) {
+		if err := c.updateConfig(ScopeGlobal, noop); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("want %q, got %v", tc.want, err)
 		}
 	}
 	gitOpenFile = func(string, int, os.FileMode) (gitLockFile, error) { return &fakeGitLock{}, nil }
 	gitRename = func(string, string) error { return errors.New("rename") }
-	if err := c.saveConfig(ScopeGlobal, file); err == nil || !strings.Contains(err.Error(), "replace git config") {
+	if err := c.updateConfig(ScopeGlobal, noop); err == nil || !strings.Contains(err.Error(), "replace git config") {
 		t.Fatal(err)
 	}
 }

@@ -171,6 +171,12 @@ gha --config-dir "${HOME}/.config/gha-dev" list
 
 Configuration templates are available at [`configs/accounts.example.yaml`](configs/accounts.example.yaml) and [`configs/config.example.yaml`](configs/config.example.yaml).
 
+### Git Config Scope
+
+`gha` reads ordinary Git configuration and `[include]` files directly. When the selected config contains `includeIf`, it asks the installed `git` binary to resolve those conditions. Identity reads use the selected local or global scope; they do **not** merge system-wide (`/etc/gitconfig`) configuration or all scopes into the effective commit identity.
+
+Rewriting remote URLs (`gha use --update-remote` or `update_remote: true`) requires Git 2.46+. It clears the earlier URL list after all includes, then writes the selected URL, so inherited URLs do not remain as extra push targets. Explicit `remote.<name>.pushurl` settings are preserved. Older Git versions are rejected before the remote config is written.
+
 ## Command Reference
 
 | Command | Description |
@@ -265,6 +271,8 @@ gha clone OWNER/PRIVATE_REPO -a personal
 # Clone repository with automatic account detection
 gha clone https://github.com/OWNER/PRIVATE_REPO.git
 ```
+
+`gha use` refreshes the HTTPS credential binding even when the profile prefers SSH, because existing remotes may still use HTTPS. SSH authentication continues to use SSH keys.
 
 ## Shell Completion
 

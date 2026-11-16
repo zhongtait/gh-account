@@ -80,6 +80,10 @@ func newUseCmd() *cobra.Command {
 				}
 			}
 
+			// A profile's preferred protocol does not determine the protocol of
+			// every existing remote. Refresh the HTTP(S) binding even for SSH
+			// profiles so HTTPS remotes cannot keep using the previous account.
+			// Git does not consult this helper for SSH authentication.
 			credentialConfigured := false
 			if credentialClient, ok := deps.Git.(git.CredentialClient); ok {
 				if err := credentialClient.SetCredentialHelper(ctx, scope, credentialHelperCommand(deps.Store, account), credentialAccountKey(account)); err != nil {
@@ -135,18 +139,13 @@ func updateOriginRemote(ctx context.Context, account config.Account) error {
 		return err
 	}
 
-	info, err := remote.Parse(currentURL)
-	if err != nil {
-		return err
-	}
-
-	// Prefer account protocol when rewriting.
+	// Prefer the account's protocol when rewriting, and let the remote package
+	// build the URL so SSH user and port handling stay consistent with clone.
+	protocol := ""
 	if account.Protocol != "" {
-		info.Protocol = account.Protocol
+		protocol = account.Protocol
 	}
-	info.Owner = account.Login
-
-	nextURL, err := remote.Build(info)
+	nextURL, err := remote.Rewrite(currentURL, account.Login, protocol)
 	if err != nil {
 		return err
 	}
